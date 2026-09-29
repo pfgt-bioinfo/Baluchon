@@ -149,8 +149,8 @@ cmd_configure() {
   local_port="${local_port:-8000}"
   read -r -p "Dossier de Baluchon sur le cluster [~/baluchon-bubble/app] : " remote_dir
   remote_dir="${remote_dir:-~/baluchon-bubble/app}"
-  read -r -p "Image Singularity sur le cluster [~/baluchon-bubble/images/python-3.11.sif] : " image
-  image="${image:-~/baluchon-bubble/images/python-3.11.sif}"
+  read -r -p "Image Singularity sur le cluster [/data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images/python-3.11.sif] : " image
+  image="${image:-/data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images/python-3.11.sif}"
 
   cat > "${CONFIG_FILE}" <<EOF
 # baluchon-bubble client config

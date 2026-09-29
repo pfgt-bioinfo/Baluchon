@@ -25,15 +25,29 @@ Inspiré de [`pfgt-bubble-cli`](https://gitlab.com/pfgt/apps/pfgt-bubble-cli) : 
 | `~/baluchon-bubble/app/` | le code de Baluchon, `.env`, `baluchon.db`, `uploads/` |
 | `~/baluchon-bubble/app/venv/` | les dépendances Python (Flask, gunicorn…) |
 | `~/baluchon-bubble/app/bubble-state/` | le script du job, `session.json`, les logs (`logs/<jobid>.out`) |
-| `~/baluchon-bubble/images/python-3.11.sif` | l'image Singularity (Python officiel) |
+| `/data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images/python-3.11.sif` | l'image Singularity (Python officiel), partagée avec l'équipe |
 
-Tout est rangé dans `~/baluchon-bubble/`, à part de `~/bubbles/` qui est géré par pfgt-bubble pour les projets R. Les chemins sont modifiables dans `~/.config/baluchon-bubble/config`.
+L'application est rangée dans `~/baluchon-bubble/`, à part de `~/bubbles/` qui est géré par pfgt-bubble pour les projets R. Elle reste dans votre home car elle contient votre base et votre clé secrète (`.env`). Les chemins sont modifiables dans `~/.config/baluchon-bubble/config`.
 
 ## L'image Singularity
 
 L'image est l'image Python officielle (`docker://python:3.11-slim-bookworm`). Singularity peut la récupérer **sans droits root**, contrairement à une image construite à partir d'un fichier `.def`. Les dépendances de Baluchon (`requirements.txt`) sont installées à côté, dans `~/baluchon-bubble/app/venv/`, sur le même principe que `renv` pour les bubbles R : l'image fournit Python et le venv fournit les paquets.
 
-`baluchon-bubble pull-image` se charge de la récupérer : rien à construire ni à copier à la main.
+L'image est **déjà disponible** dans le dossier partagé de l'équipe (lisible depuis la frontale et les nœuds de calcul) :
+
+```
+/data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images/python-3.11.sif
+```
+
+C'est le chemin proposé par défaut par `configure` : rien à faire si vous le gardez. Pour la (re)créer, depuis la frontale, qui a internet :
+
+```bash
+mkdir -p /data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images
+cd /data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images
+singularity build python-3.11.sif docker://python:3.11-slim-bookworm
+```
+
+ou `baluchon-bubble pull-image`, qui fait la même chose et ne fait rien si l'image existe déjà.
 
 `baluchon.def` décrit une image complète (Python + dépendances), qu'on pourra utiliser si quelqu'un qui a les droits (root ou fakeroot) la construit un jour :
 
@@ -52,7 +66,7 @@ cp bubble/baluchon-bubble ~/.local/bin/    # optionnel
 
 ```bash
 baluchon-bubble configure   # hôte, identifiant, port local, chemins sur le cluster
-baluchon-bubble pull-image  # récupère l'image Python sur le cluster (quelques minutes)
+baluchon-bubble pull-image  # récupère l'image si elle n'existe pas encore (sinon ne fait rien)
 baluchon-bubble deploy      # copie le code sur le cluster (rsync)
 baluchon-bubble init        # installe les dépendances, crée .env, la base et le compte
 ```
