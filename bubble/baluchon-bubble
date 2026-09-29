@@ -27,7 +27,7 @@ SESSIONS_DIR="${CONFIG_DIR}/sessions"
 CTRL_SOCKET="${SESSIONS_DIR}/baluchon.ctrl"
 
 # nom du job Slurm (une seule session Baluchon par utilisateur)
-JOB_NAME="baluchon-bubble"
+JOB_NAME="bubble-baluchon"
 
 # image de base, récupérée par 'baluchon-bubble pull-image'
 BASE_IMAGE="docker://python:3.11-slim-bookworm"
