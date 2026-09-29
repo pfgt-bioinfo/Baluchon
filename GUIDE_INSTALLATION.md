@@ -94,13 +94,13 @@ C'est tout. Vos données sont enregistrées localement dans le fichier `baluchon
 ## 6. Sauvegarder ses données
 
 Toutes vos données tiennent dans deux endroits, à l'intérieur du dossier `baluchon` :
-- le fichier **`instance/baluchon.db`** (projets, événements, tâches, infos)
+- le fichier **`baluchon.db`** (projets, événements, tâches, infos)
 - le dossier **`uploads/`** (fichiers que vous avez importés)
 
 Pour faire une sauvegarde, il suffit de copier ces deux éléments ailleurs (disque externe, cloud…). Par exemple :
 
 ```bash
-cp instance/baluchon.db ~/Desktop/baluchon-sauvegarde.db
+cp baluchon.db ~/Desktop/baluchon-sauvegarde.db
 cp -r uploads ~/Desktop/baluchon-uploads-sauvegarde
 ```
 
@@ -120,7 +120,7 @@ source venv/bin/activate
 python create_admin.py
 ```
 
-**Réinitialiser complètement (effacer toutes les données)** → supprimez le fichier `instance/baluchon.db`, puis relancez :
+**Réinitialiser complètement (effacer toutes les données)** → supprimez le fichier `baluchon.db`, puis relancez :
 ```bash
 source venv/bin/activate
 python init_db.py
