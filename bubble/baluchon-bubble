@@ -1,0 +1,657 @@
+#!/bin/bash
+#
+# baluchon-bubble — lance Baluchon sur un nœud de calcul du cluster
+#
+# Inspiré de pfgt-bubble-cli : même principe (job Slurm + image Singularity
+# + tunnel SSH + navigateur), mais au lieu de RStudio c'est Baluchon (gunicorn)
+# qui tourne sur le nœud. Contrairement à pfgt-bubble, il n'y a pas de serveur
+# côté cluster : ce script fait lui-même le sbatch via SSH.
+#
+set -euo pipefail
+
+BUBBLE_VERSION="0.1.0"
+
+#
+# chemins locaux
+#
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "${SCRIPT_PATH}")"
+
+CONFIG_DIR="${HOME}/.config/baluchon-bubble"
+CONFIG_FILE="${CONFIG_DIR}/config"
+SESSIONS_DIR="${CONFIG_DIR}/sessions"
+CTRL_SOCKET="${SESSIONS_DIR}/baluchon.ctrl"
+
+# nom du job Slurm (une seule session Baluchon par utilisateur)
+JOB_NAME="baluchon-bubble"
+
+#
+# couleurs
+#
+if [[ -t 1 ]] && [[ -z "${NO_COLOR:-}" ]]; then
+  readonly C_RESET=$'\033[0m'
+  readonly C_RED=$'\033[31m'
+  readonly C_GREEN=$'\033[32m'
+  readonly C_YELLOW=$'\033[33m'
+  readonly C_BLUE=$'\033[34m'
+else
+  readonly C_RESET="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE=""
+fi
+
+#
+# helpers
+#
+die()  { echo "${C_RED}ERREUR :${C_RESET} $*" >&2; exit 1; }
+info() { echo "${C_BLUE}+${C_RESET} $*" >&2; }
+ok()   { echo "${C_GREEN}✓${C_RESET} $*" >&2; }
+warn() { echo "${C_YELLOW}!${C_RESET} $*" >&2; }
+
+# config
+config_get() {
+  local key="$1"
+  [[ -f "${CONFIG_FILE}" ]] || die "Pas de fichier de config. Lancez : baluchon-bubble configure"
+  local val
+  val=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "${CONFIG_FILE}" | head -1 \
+        | sed -E "s/^[^=]+=[[:space:]]*//;s/[[:space:]]*$//")
+  [[ -n "${val}" ]] || die "Clé '${key}' manquante dans ${CONFIG_FILE}"
+  echo "${val}"
+}
+
+# convertit un chemin de la config en chemin utilisable dans une commande distante :
+# "~/x" devient "$HOME/x" (expansé par le shell du cluster, entre guillemets doubles)
+to_remote() {
+  local p="$1"
+  if [[ "${p}" == "~" ]]; then
+    echo '$HOME'
+  elif [[ "${p}" == "~/"* ]]; then
+    echo "\$HOME/${p#\~/}"
+  else
+    echo "${p}"
+  fi
+}
+
+# chemins distants : dossier de l'application et image Singularity
+load_remote_paths() {
+  RDIR=$(to_remote "$(config_get remote_dir)")
+  RIMG=$(to_remote "$(config_get image)")
+  RSTATE="${RDIR}/bubble-state"
+}
+
+# ssh
+remote() {
+  local host user
+  host=$(config_get host)
+  user=$(config_get user)
+  ssh -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=30 \
+      "${user}@${host}" "$@"
+}
+
+remote_tty() {
+  local host user
+  host=$(config_get host)
+  user=$(config_get user)
+  ssh -t -o LogLevel=ERROR -o ConnectTimeout=10 -o ServerAliveInterval=30 \
+      "${user}@${host}" "$@"
+}
+
+check_connection() {
+  if ! remote 'echo connected' >/dev/null 2>&1; then
+    die "Impossible de se connecter au cluster. Vérifiez la config SSH et le VPN."
+  fi
+}
+
+# commande singularity/apptainer, évaluée côté cluster
+SING_DETECT='SING=$(command -v apptainer || command -v singularity) || { echo "singularity/apptainer introuvable sur le cluster" >&2; exit 1; }'
+
+# exécute une commande python dans l'image, dans le dossier de l'application (sur la frontale)
+container_cmd() {
+  echo "${SING_DETECT}; cd \"${RDIR}\" && \"\$SING\" exec --cleanenv --bind \"${RDIR}\" --pwd \"${RDIR}\" \"${RIMG}\" $*"
+}
+
+# vérifie que l'image et l'application sont en place sur le cluster
+check_remote_install() {
+  remote "test -f \"${RIMG}\"" \
+    || die "Image introuvable sur le cluster : $(config_get image)"
+  remote "test -f \"${RDIR}/app.py\"" \
+    || die "Baluchon n'est pas déployé dans $(config_get remote_dir). Lancez : baluchon-bubble deploy"
+  remote "test -f \"${RDIR}/.env\" && test -f \"${RDIR}/baluchon.db\"" \
+    || die "Baluchon n'est pas initialisé sur le cluster. Lancez : baluchon-bubble init"
+}
+
+# jobid de la session en cours (vide si aucune)
+running_jobid() {
+  remote "squeue -h -u \$USER -n ${JOB_NAME} -o %i" 2>/dev/null | head -1
+}
+
+#
+# commandes locales
+#
+
+cmd_configure() {
+  mkdir -p "${CONFIG_DIR}" "${SESSIONS_DIR}"
+  if [[ -f "${CONFIG_FILE}" ]]; then
+    info "La config existe déjà : ${CONFIG_FILE}. Modifiez-la à la main ou supprimez-la d'abord."
+    return 0
+  fi
+  local host user local_port remote_dir image
+  read -r -p "Nom d'hôte du cluster (ex. gnomic.example.org) : " host
+  read -r -p "Identifiant sur le cluster : " user
+  read -r -p "Port local pour Baluchon [8000] : " local_port
+  local_port="${local_port:-8000}"
+  read -r -p "Dossier de Baluchon sur le cluster [~/bubbles/baluchon] : " remote_dir
+  remote_dir="${remote_dir:-~/bubbles/baluchon}"
+  read -r -p "Image Singularity sur le cluster [~/bubbles/images/baluchon.sif] : " image
+  image="${image:-~/bubbles/images/baluchon.sif}"
+
+  cat > "${CONFIG_FILE}" <<EOF
+# baluchon-bubble client config
+host = ${host}
+user = ${user}
+local_port = ${local_port}
+remote_dir = ${remote_dir}
+image = ${image}
+EOF
+  ok "Config écrite dans ${CONFIG_FILE}"
+}
+
+cmd_version() {
+  echo "baluchon-bubble ${BUBBLE_VERSION}"
+}
+
+cmd_help() {
+  cat <<EOF
+baluchon-bubble ${BUBBLE_VERSION} — Baluchon sur un nœud de calcul du cluster
+
+Usage :
+  baluchon-bubble <commande> [args...]
+
+Installation (une fois) :
+  configure                             Configure la connexion SSH et les chemins
+  deploy [<dossier-baluchon>]           Copie le code de Baluchon sur le cluster (rsync)
+  init                                  Crée .env, la base et le compte de connexion
+
+Session :
+  start [--cpus N --mem XG --time HH:MM:SS --partition NAME]
+                                        Démarre Baluchon et ouvre le navigateur
+  attach                                Se reconnecte à une session en cours
+  stop                                  Arrête la session
+  status                                Affiche la session en cours
+  logs                                  Affiche la fin du log du dernier job
+
+Divers :
+  version                               Affiche la version
+  help                                  Affiche cette aide
+
+Exemples :
+  baluchon-bubble deploy
+  baluchon-bubble init
+  baluchon-bubble start --cpus 2 --mem 4G --time 08:00:00
+EOF
+}
+
+#
+# helpers multi-plateformes [macOS + Linux]
+#
+
+open_browser() {
+  local url="$1"
+  if command -v open >/dev/null 2>&1; then
+    open "${url}" 2>/dev/null || true       # macOS
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "${url}" 2>/dev/null || true   # Linux
+  else
+    echo "(Impossible d'ouvrir le navigateur automatiquement ; allez sur ${url})" >&2
+  fi
+}
+
+notify() {
+  local title="$1" message="$2"
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"${message}\" with title \"${title}\"" 2>/dev/null || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send "${title}" "${message}" 2>/dev/null || true
+  fi
+}
+
+
+#
+# deploy
+#
+
+# rsync du code vers le cluster. Jamais de --delete : la base, le .env
+# et les uploads présents sur le cluster ne sont jamais touchés.
+cmd_deploy() {
+  local src="${1:-}"
+  if [[ -z "${src}" ]]; then
+    if [[ -f "${SCRIPT_DIR}/../app.py" ]]; then
+      src="$(readlink -f "${SCRIPT_DIR}/..")"
+    elif [[ -f "${PWD}/app.py" ]]; then
+      src="${PWD}"
+    else
+      die "Dossier Baluchon introuvable. Usage : baluchon-bubble deploy <dossier-baluchon>"
+    fi
+  fi
+  [[ -f "${src}/app.py" ]] || die "${src} ne ressemble pas à Baluchon (pas de app.py)"
+  command -v rsync >/dev/null 2>&1 || die "rsync n'est pas installé"
+  check_connection
+  load_remote_paths
+
+  local host user remote_dir dest
+  host=$(config_get host)
+  user=$(config_get user)
+  remote_dir=$(config_get remote_dir)
+  # rsync : un chemin relatif est relatif au home distant
+  dest="${remote_dir#\~/}"
+
+  remote "mkdir -p \"${RDIR}/uploads\" \"${RSTATE}/logs\""
+  info "Copie de ${src} vers ${host}:${remote_dir}"
+  rsync -az \
+    --exclude '.git/' \
+    --exclude 'venv/' --exclude '.venv/' \
+    --exclude '.env' --exclude '*.db' \
+    --exclude 'instance/' \
+    --exclude 'uploads/*' \
+    --exclude 'bubble-state/' \
+    --exclude '__pycache__/' --exclude '*.pyc' \
+    --exclude '*.sif' \
+    "${src}/" "${user}@${host}:${dest}/"
+  ok "Code déployé."
+}
+
+
+#
+# init
+#
+
+# à lancer une fois : .env avec clé secrète, base SQLite, compte de connexion.
+# Tourne sur la frontale, dans l'image (même Python que les sessions).
+cmd_init() {
+  check_connection
+  load_remote_paths
+  remote "test -f \"${RIMG}\"" \
+    || die "Image introuvable sur le cluster : $(config_get image)"
+  remote "test -f \"${RDIR}/app.py\"" \
+    || die "Baluchon n'est pas déployé. Lancez d'abord : baluchon-bubble deploy"
+
+  if remote "test -f \"${RDIR}/.env\""; then
+    info "Fichier .env déjà présent sur le cluster, conservé tel quel."
+  else
+    info "Génération du fichier .env..."
+    remote "$(container_cmd python3 -c "\"import secrets; print('SECRET_KEY=' + secrets.token_hex(32)); print('DATABASE_URI=sqlite:///baluchon.db')\"") > \"${RDIR}/.env\" && chmod 600 \"${RDIR}/.env\"" \
+      || die "Échec de la création du .env"
+    ok "Fichier .env créé avec une clé secrète unique."
+  fi
+
+  info "Initialisation de la base de données..."
+  remote "$(container_cmd python3 init_db.py)"
+
+  echo
+  info "Création du compte de connexion :"
+  remote_tty "$(container_cmd python3 create_admin.py)"
+}
+
+
+#
+# start
+#
+
+# 1. vérifie l'installation et l'absence de session déjà en cours
+# 2. écrit le script sbatch sur le cluster et le soumet
+# 3. attend que le job soit RUNNING
+# 4. lit session.json (écrit par le job quand gunicorn répond)
+# 5. ouvre le tunnel SSH local_port -> frontale -> nœud:port
+# 6. ouvre le navigateur, reste au premier plan ; Ctrl+C = scancel + fermeture du tunnel
+
+cmd_start() {
+  local cpus="2" mem="4G" time="08:00:00" partition=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cpus)      cpus="${2:-}"; shift 2 ;;
+      --mem)       mem="${2:-}"; shift 2 ;;
+      --time)      time="${2:-}"; shift 2 ;;
+      --partition) partition="${2:-}"; shift 2 ;;
+      *) die "Option inconnue : $1. Usage : baluchon-bubble start [--cpus N --mem XG --time HH:MM:SS --partition NAME]" ;;
+    esac
+  done
+  [[ "${cpus}" =~ ^[0-9]+$ ]]          || die "--cpus invalide : ${cpus}"
+  [[ "${mem}" =~ ^[0-9]+[KMGT]?$ ]]    || die "--mem invalide : ${mem}"
+  [[ "${time}" =~ ^[0-9:-]+$ ]]        || die "--time invalide : ${time}"
+  [[ -z "${partition}" || "${partition}" =~ ^[A-Za-z0-9_.,-]+$ ]] || die "--partition invalide : ${partition}"
+
+  check_connection
+  load_remote_paths
+  mkdir -p "${SESSIONS_DIR}"
+
+  local host user local_port
+  host=$(config_get host)
+  user=$(config_get user)
+  local_port=$(config_get local_port)
+
+  # step 1: vérifications
+  check_remote_install
+  local existing
+  existing=$(running_jobid)
+  if [[ -n "${existing}" ]]; then
+    die "Une session Baluchon tourne déjà (job ${existing}). Utilisez 'baluchon-bubble attach' ou 'baluchon-bubble stop'."
+  fi
+
+  # step 2: script sbatch (réécrit à chaque start pour suivre les mises à jour du client)
+  remote "mkdir -p \"${RSTATE}/logs\" && rm -f \"${RSTATE}/session.json\" && cat > \"${RSTATE}/job.sbatch\"" <<'JOBEOF'
+#!/bin/bash
+# généré par baluchon-bubble — ne pas modifier, réécrit à chaque start
+set -euo pipefail
+
+DIR="$1"
+IMAGE="$2"
+THREADS="$3"
+STATE="${DIR}/bubble-state"
+
+SING=$(command -v apptainer || command -v singularity) \
+  || { echo "singularity/apptainer introuvable sur le nœud"; exit 1; }
+
+GPID=""
+cleanup() {
+  rm -f "${STATE}/session.json"
+  if [[ -n "${GPID}" ]]; then kill "${GPID}" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM INT
+
+# port libre sur le nœud
+PORT=$("${SING}" exec --cleanenv "${IMAGE}" python3 -c \
+  'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
+
+echo "baluchon-bubble : démarrage de gunicorn sur $(hostname):${PORT}"
+
+# un seul worker (plusieurs threads) : la base SQLite est sur NFS,
+# plusieurs processus qui écrivent dedans risqueraient des problèmes de verrou
+"${SING}" exec --cleanenv --bind "${DIR}" --pwd "${DIR}" "${IMAGE}" \
+  gunicorn -w 1 --threads "${THREADS}" -b "0.0.0.0:${PORT}" \
+  --access-logfile - --error-logfile - app:app &
+GPID=$!
+
+# attend que gunicorn réponde avant d'annoncer la session
+ready=0
+for i in $(seq 1 60); do
+  if ! kill -0 "${GPID}" 2>/dev/null; then
+    echo "gunicorn s'est arrêté au démarrage"
+    exit 1
+  fi
+  if "${SING}" exec --cleanenv "${IMAGE}" python3 -c \
+       "import socket, sys; s=socket.socket(); s.settimeout(1); sys.exit(s.connect_ex(('127.0.0.1', ${PORT})))" 2>/dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+[[ "${ready}" == 1 ]] || { echo "gunicorn ne répond pas après 60 s"; exit 1; }
+
+printf '{"jobid":"%s","node":"%s","port":%s}\n' "${SLURM_JOB_ID}" "$(hostname)" "${PORT}" \
+  > "${STATE}/session.json.tmp"
+mv "${STATE}/session.json.tmp" "${STATE}/session.json"
+echo "baluchon-bubble : session prête"
+
+wait "${GPID}"
+JOBEOF
+
+  info "Soumission du job Slurm..."
+  local threads=$(( cpus * 2 ))
+  (( threads < 4 )) && threads=4
+  local submit_out jobid
+  submit_out=$(remote "sbatch --parsable --job-name=${JOB_NAME} \
+    --chdir=\"${RDIR}\" --output=\"${RSTATE}/logs/%j.out\" \
+    --cpus-per-task=${cpus} --mem=${mem} --time=${time} \
+    ${partition:+--partition=${partition}} \
+    \"${RSTATE}/job.sbatch\" \"${RDIR}\" \"${RIMG}\" ${threads}") || true
+  jobid="${submit_out%%;*}"
+  [[ "${jobid}" =~ ^[0-9]+$ ]] || die "Échec de la soumission du job (reçu : ${submit_out})"
+  echo "{\"jobid\":\"${jobid}\"}" > "${SESSIONS_DIR}/baluchon.json"
+  ok "Job soumis : ${jobid}"
+
+  # on piège les signaux tôt pour être sûr d'annuler le job
+  trap "_start_cleanup '${user}' '${host}' '${jobid}'" INT TERM
+
+  # step 3: attente de l'état RUNNING
+  info "Attente de l'allocation des ressources..."
+  local state="" attempts=0 max_attempts=300
+  while (( attempts < max_attempts )); do
+    state=$(remote "squeue -h -j ${jobid} -o '%T'" 2>/dev/null || echo "")
+    case "${state}" in
+      RUNNING) break ;;
+      "") _show_job_log "${jobid}"
+          die "Le job ${jobid} n'est plus dans la file (probablement en échec)." ;;
+      *) printf '.' >&2 ;;
+    esac
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+  echo >&2
+  [[ "${state}" == "RUNNING" ]] || die "Délai dépassé en attendant le démarrage du job"
+  ok "Le job tourne."
+
+  # step 4: lecture de session.json (attente côté cluster)
+  info "Démarrage de Baluchon sur le nœud (~60 s max)..."
+  local session_json
+  session_json=$(remote "
+  for i in \$(seq 1 90); do
+    # force l'invalidation du cache NFS
+    ls \"${RSTATE}/\" >/dev/null 2>&1
+    if [ -f \"${RSTATE}/session.json\" ]; then
+      cat \"${RSTATE}/session.json\"
+      exit 0
+    fi
+    squeue -h -j ${jobid} -o %T 2>/dev/null | grep -q . || exit 1
+    sleep 1
+  done
+  exit 1
+  " 2>/dev/null) || true
+
+  if [[ -z "${session_json}" ]]; then
+    _show_job_log "${jobid}"
+    remote "scancel ${jobid}" >/dev/null 2>&1 || true
+    die "Baluchon n'a pas démarré sur le nœud."
+  fi
+
+  local node port
+  node=$(echo "${session_json}" | jq -r '.node // empty')
+  port=$(echo "${session_json}" | jq -r '.port // empty')
+  [[ -n "${node}" && -n "${port}" ]] || die "Fichier de session invalide : ${session_json}"
+  ok "Alloué sur ${node}:${port}."
+
+  # step 5: tunnel SSH
+  _open_tunnel "${user}" "${host}" "${local_port}" "${node}" "${port}"
+
+  # step 6: navigateur + boucle de surveillance
+  _print_session "${local_port}" "${node}" "${port}" "${jobid}"
+  open_browser "http://localhost:${local_port}"
+  notify "baluchon-bubble" "Baluchon est prêt"
+
+  echo "Ctrl+C pour fermer la session et arrêter le job."
+  while ssh -o LogLevel=ERROR -S "${CTRL_SOCKET}" -O check "${user}@${host}" 2>/dev/null; do
+    sleep 5
+    local current_state
+    current_state=$(remote "squeue -h -j ${jobid} -o '%T'" 2>/dev/null || echo "")
+    if [[ -z "${current_state}" ]]; then
+      info "Le job ${jobid} s'est terminé sur le cluster (walltime atteint ou scancel)"
+      break
+    fi
+  done
+
+  _start_cleanup "${user}" "${host}" "${jobid}"
+}
+
+_open_tunnel() {
+  local user="$1" host="$2" local_port="$3" node="$4" port="$5"
+  info "Ouverture du tunnel SSH : localhost:${local_port} -> ${node}:${port}"
+  ssh -f -N -M \
+      -o LogLevel=ERROR \
+      -S "${CTRL_SOCKET}" \
+      -L "127.0.0.1:${local_port}:${node}:${port}" \
+      -o ServerAliveInterval=30 \
+      -o ExitOnForwardFailure=yes \
+      "${user}@${host}" \
+    || die "Impossible d'ouvrir le tunnel (le port local ${local_port} est-il déjà utilisé ?)"
+
+  sleep 1
+  if ! ssh -S "${CTRL_SOCKET}" -O check "${user}@${host}" 2>/dev/null; then
+    die "Impossible d'établir le tunnel SSH"
+  fi
+  ok "Tunnel prêt."
+}
+
+_print_session() {
+  local local_port="$1" node="$2" port="$3" jobid="$4"
+  echo
+  echo "============================================================"
+  echo "  Session Baluchon"
+  echo "  URL      : http://localhost:${local_port}"
+  echo "  Nœud     : ${node}  (port ${port})"
+  echo "  Job ID   : ${jobid}"
+  echo "  Connexion avec le compte créé par 'baluchon-bubble init'"
+  echo "============================================================"
+  echo
+}
+
+_show_job_log() {
+  local jobid="$1"
+  local log
+  log=$(remote "tail -n 20 \"${RSTATE}/logs/${jobid}.out\"" 2>/dev/null || true)
+  if [[ -n "${log}" ]]; then
+    warn "Fin du log du job ${jobid} :"
+    echo "${log}" >&2
+  fi
+}
+
+_start_cleanup() {
+  local user="$1" host="$2" jobid="${3:-}"
+  echo
+  info "Fermeture de la session..."
+
+  # ferme le tunnel s'il a été ouvert
+  if [[ -e "${CTRL_SOCKET}" ]]; then
+    ssh -o LogLevel=ERROR -S "${CTRL_SOCKET}" -O exit "${user}@${host}" 2>/dev/null || true
+    rm -f "${CTRL_SOCKET}"
+  fi
+
+  # annule toujours le job côté cluster
+  if [[ -n "${jobid}" ]]; then
+    remote "scancel ${jobid}" >/dev/null 2>&1 || true
+  else
+    remote "scancel -u \$USER -n ${JOB_NAME}" >/dev/null 2>&1 || true
+  fi
+
+  rm -f "${SESSIONS_DIR}/baluchon.json"
+  ok "Session fermée."
+  exit 0
+}
+
+
+#
+# attach
+#
+
+cmd_attach() {
+  check_connection
+  load_remote_paths
+  mkdir -p "${SESSIONS_DIR}"
+
+  local host user local_port
+  host=$(config_get host)
+  user=$(config_get user)
+  local_port=$(config_get local_port)
+
+  local jobid
+  jobid=$(running_jobid)
+  [[ -n "${jobid}" ]] || die "Aucune session Baluchon en cours. Lancez : baluchon-bubble start"
+
+  local session_json
+  session_json=$(remote "cat \"${RSTATE}/session.json\"" 2>/dev/null) \
+    || die "Le job ${jobid} tourne mais Baluchon n'est pas encore prêt. Réessayez dans quelques secondes."
+
+  local node port
+  node=$(echo "${session_json}" | jq -r '.node // empty')
+  port=$(echo "${session_json}" | jq -r '.port // empty')
+  [[ -n "${node}" && -n "${port}" ]] || die "Fichier de session invalide : ${session_json}"
+
+  info "Reconnexion à la session en cours (jobid=${jobid})"
+  _open_tunnel "${user}" "${host}" "${local_port}" "${node}" "${port}"
+  _print_session "${local_port}" "${node}" "${port}" "${jobid}"
+  open_browser "http://localhost:${local_port}"
+
+  echo "Ctrl+C pour fermer la session et arrêter le job."
+  trap "_start_cleanup '${user}' '${host}' '${jobid}'" INT TERM
+  while ssh -o LogLevel=ERROR -S "${CTRL_SOCKET}" -O check "${user}@${host}" 2>/dev/null; do
+    sleep 5
+  done
+}
+
+
+#
+# stop / status / logs
+#
+
+cmd_stop() {
+  check_connection
+  remote "scancel -u \$USER -n ${JOB_NAME}" >/dev/null 2>&1 || true
+
+  rm -f "${SESSIONS_DIR}/baluchon.json"
+  local user host
+  user=$(config_get user)
+  host=$(config_get host)
+  if [[ -e "${CTRL_SOCKET}" ]]; then
+    ssh -o LogLevel=ERROR -S "${CTRL_SOCKET}" -O exit "${user}@${host}" 2>/dev/null || true
+    rm -f "${CTRL_SOCKET}"
+  fi
+  ok "Job arrêté, tunnel fermé et état local nettoyé."
+}
+
+cmd_status() {
+  check_connection
+  load_remote_paths
+  local jobid
+  jobid=$(running_jobid)
+  if [[ -z "${jobid}" ]]; then
+    info "Aucune session Baluchon en cours."
+    return 0
+  fi
+  remote "squeue -j ${jobid} -o '%.10i %.9T %.10M %.10l %.6C %.8m %R'"
+  local session_json
+  if session_json=$(remote "cat \"${RSTATE}/session.json\"" 2>/dev/null); then
+    echo "session : ${session_json}"
+  else
+    info "Baluchon n'est pas encore prêt sur le nœud."
+  fi
+}
+
+cmd_logs() {
+  check_connection
+  load_remote_paths
+  remote "f=\$(ls -t \"${RSTATE}\"/logs/*.out 2>/dev/null | head -1); \
+    if [ -n \"\$f\" ]; then echo \"== \$f\"; tail -n 50 \"\$f\"; else echo 'Aucun log.'; fi"
+}
+
+
+#
+# main
+#
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+
+  case "${cmd}" in
+    configure)            cmd_configure "$@" ;;
+    deploy)               cmd_deploy "$@" ;;
+    init)                 cmd_init "$@" ;;
+    start)                cmd_start "$@" ;;
+    attach)               cmd_attach "$@" ;;
+    stop)                 cmd_stop "$@" ;;
+    status)               cmd_status "$@" ;;
+    logs)                 cmd_logs "$@" ;;
+    version|-v|--version) cmd_version ;;
+    help|-h|--help)       cmd_help ;;
+    *) die "Commande inconnue : ${cmd}. Lancez 'baluchon-bubble help'." ;;
+  esac
+}
+
+main "$@"

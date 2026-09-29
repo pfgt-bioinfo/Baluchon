@@ -22,3 +22,6 @@ __pycache__/
 *.log
 *.swp
 *~
+
+# Images Singularity
+*.sif

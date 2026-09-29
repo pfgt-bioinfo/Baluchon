@@ -1,0 +1,44 @@
+Bootstrap: docker
+From: python:3.11-slim-bookworm
+
+# Image Singularity de Baluchon pour baluchon-bubble.
+#
+# L'image ne contient que l'environnement (Python + dépendances de
+# requirements.txt). Le code de Baluchon, la base et les uploads restent
+# dans le dossier du cluster (~/bubbles/baluchon) : il suffit de
+# 'baluchon-bubble deploy' pour mettre le code à jour, sans reconstruire
+# l'image. On ne la reconstruit que si requirements.txt change.
+#
+# Construction (depuis la racine du repo Baluchon) :
+#   sudo singularity build baluchon.sif bubble/baluchon.def
+#   # ou, sans sudo si le fakeroot est autorisé :
+#   apptainer build --fakeroot baluchon.sif bubble/baluchon.def
+
+%files
+    requirements.txt /opt/baluchon/requirements.txt
+
+%post
+    set -eu
+    pip install --no-cache-dir --upgrade pip
+    pip install --no-cache-dir -r /opt/baluchon/requirements.txt
+    rm -rf /root/.cache
+
+%environment
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+
+%runscript
+    exec gunicorn "$@"
+
+%test
+    python3 -c "import flask, flask_sqlalchemy, flask_login, dotenv, gunicorn"
+
+%labels
+    name baluchon
+    description Environnement d'exécution de Baluchon (Flask + gunicorn)
+
+%help
+    Environnement Python de Baluchon, utilisé par baluchon-bubble.
+    Exemple : singularity exec --pwd <dossier-baluchon> baluchon.sif gunicorn -b 0.0.0.0:8000 app:app
