@@ -7,6 +7,10 @@
 # qui tourne sur le nœud. Contrairement à pfgt-bubble, il n'y a pas de serveur
 # côté cluster : ce script fait lui-même le sbatch via SSH.
 #
+# L'image est une image Python officielle (docker://python:3.11-slim), récupérable
+# sans droits root. Les dépendances de Baluchon sont installées dans un venv du
+# dossier de l'application (comme renv pour les bubbles R).
+#
 set -euo pipefail
 
 BUBBLE_VERSION="0.1.0"
@@ -24,6 +28,9 @@ CTRL_SOCKET="${SESSIONS_DIR}/baluchon.ctrl"
 
 # nom du job Slurm (une seule session Baluchon par utilisateur)
 JOB_NAME="baluchon-bubble"
+
+# image de base, récupérée par 'baluchon-bubble pull-image'
+BASE_IMAGE="docker://python:3.11-slim-bookworm"
 
 #
 # couleurs
@@ -114,6 +121,8 @@ check_remote_install() {
     || die "Image introuvable sur le cluster : $(config_get image)"
   remote "test -f \"${RDIR}/app.py\"" \
     || die "Baluchon n'est pas déployé dans $(config_get remote_dir). Lancez : baluchon-bubble deploy"
+  remote "test -x \"${RDIR}/venv/bin/gunicorn\"" \
+    || die "Dépendances non installées sur le cluster. Lancez : baluchon-bubble init"
   remote "test -f \"${RDIR}/.env\" && test -f \"${RDIR}/baluchon.db\"" \
     || die "Baluchon n'est pas initialisé sur le cluster. Lancez : baluchon-bubble init"
 }
@@ -138,10 +147,10 @@ cmd_configure() {
   read -r -p "Identifiant sur le cluster : " user
   read -r -p "Port local pour Baluchon [8000] : " local_port
   local_port="${local_port:-8000}"
-  read -r -p "Dossier de Baluchon sur le cluster [~/bubbles/baluchon] : " remote_dir
-  remote_dir="${remote_dir:-~/bubbles/baluchon}"
-  read -r -p "Image Singularity sur le cluster [~/bubbles/images/baluchon.sif] : " image
-  image="${image:-~/bubbles/images/baluchon.sif}"
+  read -r -p "Dossier de Baluchon sur le cluster [~/baluchon-bubble/app] : " remote_dir
+  remote_dir="${remote_dir:-~/baluchon-bubble/app}"
+  read -r -p "Image Singularity sur le cluster [~/baluchon-bubble/images/python-3.11.sif] : " image
+  image="${image:-~/baluchon-bubble/images/python-3.11.sif}"
 
   cat > "${CONFIG_FILE}" <<EOF
 # baluchon-bubble client config
@@ -167,8 +176,12 @@ Usage :
 
 Installation (une fois) :
   configure                             Configure la connexion SSH et les chemins
+  pull-image                            Récupère l'image Python sur le cluster
   deploy [<dossier-baluchon>]           Copie le code de Baluchon sur le cluster (rsync)
-  init                                  Crée .env, la base et le compte de connexion
+  init                                  Installe les dépendances, crée .env,
+                                        la base et le compte de connexion
+  deps                                  Réinstalle les dépendances (après un
+                                        changement de requirements.txt)
 
 Session :
   start [--cpus N --mem XG --time HH:MM:SS --partition NAME]
@@ -183,6 +196,7 @@ Divers :
   help                                  Affiche cette aide
 
 Exemples :
+  baluchon-bubble pull-image
   baluchon-bubble deploy
   baluchon-bubble init
   baluchon-bubble start --cpus 2 --mem 4G --time 08:00:00
@@ -260,18 +274,68 @@ cmd_deploy() {
 
 
 #
+# pull-image
+#
+
+# récupère l'image Python officielle depuis Docker Hub, sur la frontale
+# (elle a internet). Aucun droit root nécessaire : pas de %post à exécuter.
+cmd_pull_image() {
+  check_connection
+  load_remote_paths
+  if remote "test -f \"${RIMG}\""; then
+    info "L'image existe déjà : $(config_get image)"
+    return 0
+  fi
+  info "Récupération de ${BASE_IMAGE} vers $(config_get image) (quelques minutes)..."
+  remote "${SING_DETECT}; mkdir -p \"\$(dirname \"${RIMG}\")\" && \"\$SING\" build \"${RIMG}\" ${BASE_IMAGE}" \
+    || die "Échec de la récupération de l'image"
+  ok "Image prête."
+}
+
+
+#
+# deps
+#
+
+# (ré)installe requirements.txt dans le venv du dossier de l'application.
+# Tourne sur la frontale (internet), dans l'image : le venv est lié au Python
+# de l'image et ne fonctionne que dans le conteneur.
+cmd_deps() {
+  check_connection
+  load_remote_paths
+  remote "test -f \"${RIMG}\"" \
+    || die "Image introuvable sur le cluster. Lancez : baluchon-bubble pull-image"
+  remote "test -f \"${RDIR}/requirements.txt\"" \
+    || die "Baluchon n'est pas déployé. Lancez d'abord : baluchon-bubble deploy"
+
+  if ! remote "test -x \"${RDIR}/venv/bin/python\""; then
+    info "Création de l'environnement virtuel..."
+    remote "$(container_cmd python3 -m venv venv)" || die "Échec de la création du venv"
+  fi
+  info "Installation des dépendances (requirements.txt)..."
+  remote "$(container_cmd venv/bin/python -m pip install --no-cache-dir --quiet --upgrade pip)" \
+    || die "Échec de la mise à jour de pip"
+  remote "$(container_cmd venv/bin/python -m pip install --no-cache-dir --quiet -r requirements.txt)" \
+    || die "Échec de l'installation des dépendances"
+  ok "Dépendances installées."
+}
+
+
+#
 # init
 #
 
 # à lancer une fois : .env avec clé secrète, base SQLite, compte de connexion.
-# Tourne sur la frontale, dans l'image (même Python que les sessions).
+# Tourne sur la frontale, dans l'image, avec le venv (même Python que les sessions).
 cmd_init() {
   check_connection
   load_remote_paths
   remote "test -f \"${RIMG}\"" \
-    || die "Image introuvable sur le cluster : $(config_get image)"
+    || die "Image introuvable sur le cluster. Lancez : baluchon-bubble pull-image"
   remote "test -f \"${RDIR}/app.py\"" \
     || die "Baluchon n'est pas déployé. Lancez d'abord : baluchon-bubble deploy"
+
+  cmd_deps
 
   if remote "test -f \"${RDIR}/.env\""; then
     info "Fichier .env déjà présent sur le cluster, conservé tel quel."
@@ -283,11 +347,11 @@ cmd_init() {
   fi
 
   info "Initialisation de la base de données..."
-  remote "$(container_cmd python3 init_db.py)"
+  remote "$(container_cmd venv/bin/python init_db.py)"
 
   echo
   info "Création du compte de connexion :"
-  remote_tty "$(container_cmd python3 create_admin.py)"
+  remote_tty "$(container_cmd venv/bin/python create_admin.py)"
 }
 
 
@@ -366,7 +430,7 @@ echo "baluchon-bubble : démarrage de gunicorn sur $(hostname):${PORT}"
 # un seul worker (plusieurs threads) : la base SQLite est sur NFS,
 # plusieurs processus qui écrivent dedans risqueraient des problèmes de verrou
 "${SING}" exec --cleanenv --bind "${DIR}" --pwd "${DIR}" "${IMAGE}" \
-  gunicorn -w 1 --threads "${THREADS}" -b "0.0.0.0:${PORT}" \
+  "${DIR}/venv/bin/gunicorn" -w 1 --threads "${THREADS}" -b "0.0.0.0:${PORT}" \
   --access-logfile - --error-logfile - app:app &
 GPID=$!
 
@@ -641,8 +705,10 @@ main() {
 
   case "${cmd}" in
     configure)            cmd_configure "$@" ;;
+    pull-image)           cmd_pull_image "$@" ;;
     deploy)               cmd_deploy "$@" ;;
     init)                 cmd_init "$@" ;;
+    deps)                 cmd_deps "$@" ;;
     start)                cmd_start "$@" ;;
     attach)               cmd_attach "$@" ;;
     stop)                 cmd_stop "$@" ;;

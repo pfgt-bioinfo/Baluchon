@@ -22,51 +22,46 @@ Inspiré de [`pfgt-bubble-cli`](https://gitlab.com/pfgt/apps/pfgt-bubble-cli) : 
 
 | Chemin (par défaut) | Contenu |
 |---|---|
-| `~/bubbles/baluchon/` | le code de Baluchon, `.env`, `baluchon.db`, `uploads/` |
-| `~/bubbles/baluchon/bubble-state/` | le script du job, `session.json`, les logs (`logs/<jobid>.out`) |
-| `~/bubbles/images/baluchon.sif` | l'image Singularity (à copier vous-même, voir plus bas) |
+| `~/baluchon-bubble/app/` | le code de Baluchon, `.env`, `baluchon.db`, `uploads/` |
+| `~/baluchon-bubble/app/venv/` | les dépendances Python (Flask, gunicorn…) |
+| `~/baluchon-bubble/app/bubble-state/` | le script du job, `session.json`, les logs (`logs/<jobid>.out`) |
+| `~/baluchon-bubble/images/python-3.11.sif` | l'image Singularity (Python officiel) |
 
-Les deux chemins sont modifiables dans `~/.config/baluchon-bubble/config`.
+Tout est rangé dans `~/baluchon-bubble/`, à part de `~/bubbles/` qui est géré par pfgt-bubble pour les projets R. Les chemins sont modifiables dans `~/.config/baluchon-bubble/config`.
 
-## 1. Construire l'image Singularity
+## L'image Singularity
 
-L'image contient seulement Python et les dépendances de `requirements.txt`. Le code n'y est pas : il reste dans `~/bubbles/baluchon/` et se met à jour avec `deploy`. Il ne faut donc reconstruire l'image que si `requirements.txt` change.
+L'image est l'image Python officielle (`docker://python:3.11-slim-bookworm`). Singularity peut la récupérer **sans droits root**, contrairement à une image construite à partir d'un fichier `.def`. Les dépendances de Baluchon (`requirements.txt`) sont installées à côté, dans `~/baluchon-bubble/app/venv/`, sur le même principe que `renv` pour les bubbles R : l'image fournit Python et le venv fournit les paquets.
 
-Depuis la racine du repo Baluchon, sur une machine où Singularity/Apptainer est installé :
+`baluchon-bubble pull-image` se charge de la récupérer : rien à construire ni à copier à la main.
 
-```bash
-sudo singularity build baluchon.sif bubble/baluchon.def
-# ou, sans sudo, si le fakeroot est autorisé (par ex. sur la frontale) :
-apptainer build --fakeroot baluchon.sif bubble/baluchon.def
-```
-
-Puis copiez-la sur le cluster :
+`baluchon.def` décrit une image complète (Python + dépendances), qu'on pourra utiliser si quelqu'un qui a les droits (root ou fakeroot) la construit un jour :
 
 ```bash
-ssh <user>@<cluster> 'mkdir -p ~/bubbles/images'
-scp baluchon.sif <user>@<cluster>:~/bubbles/images/
+sudo singularity build baluchon.sif bubble/baluchon.def   # depuis la racine du repo
 ```
 
-Les fichiers `*.sif` sont ignorés par git.
-
-## 2. Installer le client
+## 1. Installer le client
 
 ```bash
 chmod +x bubble/baluchon-bubble
 cp bubble/baluchon-bubble ~/.local/bin/    # optionnel
 ```
 
-## 3. Première utilisation
+## 2. Première utilisation
 
 ```bash
 baluchon-bubble configure   # hôte, identifiant, port local, chemins sur le cluster
+baluchon-bubble pull-image  # récupère l'image Python sur le cluster (quelques minutes)
 baluchon-bubble deploy      # copie le code sur le cluster (rsync)
-baluchon-bubble init        # crée .env, la base et le compte de connexion
+baluchon-bubble init        # installe les dépendances, crée .env, la base et le compte
 ```
 
-`deploy` n'utilise jamais `--delete` et ne copie ni `.env`, ni `*.db`, ni `uploads/` : les données déjà présentes sur le cluster ne sont jamais écrasées. Relancez `deploy` après chaque mise à jour du code, puis redémarrez la session.
+`pull-image`, `deploy` et `init` s'exécutent sur la frontale, qui a accès à internet (Docker Hub, PyPI). Les nœuds de calcul n'ont pas internet.
 
-## 4. Au quotidien
+`deploy` n'utilise jamais `--delete` et ne copie ni `.env`, ni `*.db`, ni `uploads/` : les données déjà présentes sur le cluster ne sont jamais écrasées. Relancez `deploy` après chaque mise à jour du code, puis redémarrez la session. Si `requirements.txt` a changé, lancez aussi `baluchon-bubble deps`.
+
+## 3. Au quotidien
 
 ```bash
 baluchon-bubble start                          # 2 CPU, 4G, 8h par défaut

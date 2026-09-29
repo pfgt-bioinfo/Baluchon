@@ -5,7 +5,7 @@ From: python:3.11-slim-bookworm
 #
 # L'image ne contient que l'environnement (Python + dépendances de
 # requirements.txt). Le code de Baluchon, la base et les uploads restent
-# dans le dossier du cluster (~/bubbles/baluchon) : il suffit de
+# dans le dossier du cluster (~/baluchon-bubble/app) : il suffit de
 # 'baluchon-bubble deploy' pour mettre le code à jour, sans reconstruire
 # l'image. On ne la reconstruit que si requirements.txt change.
 #
