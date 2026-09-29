@@ -16,6 +16,10 @@ app = Flask(__name__)
 app.config.from_object(Config)
 db.init_app(app)
 
+# Lancé par baluchon-bubble sur un nœud de calcul : Baluchon ne tourne pas sur
+# la machine de l'utilisateur, il ne peut donc pas ouvrir de fichier sur son écran.
+EN_BUBBLE = os.getenv('BALUCHON_BUBBLE') == '1'
+
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 login_manager = LoginManager()
@@ -113,6 +117,7 @@ def inject_globals():
         PRIORITES_LABELS=PRIORITES_LABELS,
         TYPES_LIEN=TYPES_LIEN,
         TYPES_LIEN_LABELS=TYPES_LIEN_LABELS,
+        EN_BUBBLE=EN_BUBBLE,
     )
 
 # ── Page d'accueil ───────────────────────────────────────────────────────────
@@ -428,6 +433,9 @@ def projet_dashboard(projet_id):
 @login_required
 def ouvrir_projet(projet_id):
     projet = Projet.query.get_or_404(projet_id)
+    if EN_BUBBLE:
+        flash("Ouverture impossible : Baluchon tourne sur le cluster. Copiez le chemin à la place.", 'info')
+        return redirect(url_for('projet_dashboard', projet_id=projet_id))
     chemin_rproj = os.path.abspath(projet.chemin_rproj)
     if os.name == 'posix':
         subprocess.run(['open', chemin_rproj])
@@ -439,6 +447,9 @@ def ouvrir_projet(projet_id):
 @login_required
 def ouvrir_dossier(projet_id):
     projet = Projet.query.get_or_404(projet_id)
+    if EN_BUBBLE:
+        flash("Ouverture impossible : Baluchon tourne sur le cluster. Copiez le chemin à la place.", 'info')
+        return redirect(url_for('projet_dashboard', projet_id=projet_id))
     dossier_projet = os.path.dirname(os.path.abspath(projet.chemin_rproj))
     if os.name == 'posix':
         subprocess.run(['open', dossier_projet])

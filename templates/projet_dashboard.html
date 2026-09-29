@@ -41,10 +41,27 @@
                 <div class="text-muted" style="font-size:0.78rem;">{{ projet.chemin_rproj|basename }}</div>
             </div>
             <div class="d-flex gap-1 ms-2">
+                {% if EN_BUBBLE %}
+                <button type="button" class="btn-bal-ghost" style="padding:0.2rem 0.5rem;" title="Copier le chemin : {{ projet.chemin_rproj }}" data-chemin="{{ projet.chemin_rproj }}" onclick="copierChemin(this)"><i class="bi bi-clipboard"></i></button>
+                {% else %}
                 <a href="{{ url_for('ouvrir_projet', projet_id=projet.id) }}" class="btn-bal-ghost" style="padding:0.2rem 0.5rem;" title="Ouvrir"><i class="bi bi-box-arrow-up-right"></i></a>
                 <a href="{{ url_for('ouvrir_dossier', projet_id=projet.id) }}" class="btn-bal-ghost" style="padding:0.2rem 0.5rem;" title="Ouvrir le dossier"><i class="bi bi-folder2-open"></i></a>
+                {% endif %}
             </div>
         </div>
+        {% if EN_BUBBLE %}
+        <script>
+        function copierChemin(btn) {
+            const chemin = btn.dataset.chemin;
+            const icone = btn.querySelector('i');
+            if (!navigator.clipboard) { window.prompt('Copiez le chemin :', chemin); return; }
+            navigator.clipboard.writeText(chemin).then(() => {
+                icone.className = 'bi bi-clipboard-check';
+                setTimeout(() => { icone.className = 'bi bi-clipboard'; }, 1500);
+            }).catch(() => window.prompt('Copiez le chemin :', chemin));
+        }
+        </script>
+        {% endif %}
         {% endif %}
 
         {% for lien in projet.liens if lien.est_epingle %}

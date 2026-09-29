@@ -441,8 +441,9 @@ PORT=$("${SING}" exec --cleanenv "${IMAGE}" python3 -c \
 echo "baluchon-bubble : démarrage de gunicorn sur $(hostname):${PORT}"
 
 # un seul worker (plusieurs threads) : la base SQLite est sur NFS,
-# plusieurs processus qui écrivent dedans risqueraient des problèmes de verrou
-"${SING}" exec --cleanenv --bind "${DIR}" --pwd "${DIR}" "${IMAGE}" \
+# plusieurs processus qui écrivent dedans risqueraient des problèmes de verrou.
+# BALUCHON_BUBBLE=1 : Baluchon sait qu'il ne tourne pas sur le poste de l'utilisateur
+"${SING}" exec --cleanenv --env BALUCHON_BUBBLE=1 --bind "${DIR}" --pwd "${DIR}" "${IMAGE}" \
   "${DIR}/venv/bin/gunicorn" -w 1 --threads "${THREADS}" -b "0.0.0.0:${PORT}" \
   --access-logfile - --error-logfile - app:app &
 GPID=$!
