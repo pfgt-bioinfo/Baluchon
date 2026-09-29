@@ -64,7 +64,7 @@ baluchon-bubble init        # installe les dépendances, crée .env, la base et 
 ## 3. Au quotidien
 
 ```bash
-baluchon-bubble start                          # 2 CPU, 4G, 8h par défaut
+baluchon-bubble start                          # 2 CPU, 4G, 10h par défaut
 baluchon-bubble start --cpus 2 --mem 4G --time 12:00:00 --partition NAME
 
 # Ctrl+C dans le terminal ferme la session et annule le job, ou depuis ailleurs :

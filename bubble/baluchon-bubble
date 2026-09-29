@@ -199,7 +199,7 @@ Exemples :
   baluchon-bubble pull-image
   baluchon-bubble deploy
   baluchon-bubble init
-  baluchon-bubble start --cpus 2 --mem 4G --time 08:00:00
+  baluchon-bubble start --cpus 2 --mem 4G --time 10:00:00
 EOF
 }
 
@@ -367,7 +367,7 @@ cmd_init() {
 # 6. ouvre le navigateur, reste au premier plan ; Ctrl+C = scancel + fermeture du tunnel
 
 cmd_start() {
-  local cpus="2" mem="4G" time="08:00:00" partition=""
+  local cpus="2" mem="4G" time="10:00:00" partition=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cpus)      cpus="${2:-}"; shift 2 ;;
