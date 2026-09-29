@@ -95,5 +95,5 @@ Le navigateur s'ouvre sur `http://localhost:8000`. Connectez-vous avec le compte
 
 - **Une seule session à la fois** (job Slurm `baluchon-bubble`).
 - **SQLite sur NFS** : gunicorn tourne avec un seul worker (et plusieurs threads) pour éviter les problèmes de verrou. N'ouvrez pas Baluchon en même temps depuis une autre installation qui utiliserait la même base.
-- **Boutons « Ouvrir le projet / le dossier »** : ils appellent `open` sur la machine qui fait tourner Baluchon, ici le nœud de calcul, où ça ne peut pas fonctionner.
+- **Bouton « Copier le chemin » à la place de « Ouvrir »** : en local, les icônes « Ouvrir » et « Ouvrir le dossier » de la carte *Fichier main* d'un projet ouvrent le `.Rproj` sur votre écran. Dans la bubble, Baluchon tourne sur un nœud de calcul et ne peut rien ouvrir chez vous : ces icônes sont remplacées par un bouton 📋 qui copie le chemin saisi, à coller dans RStudio ou un terminal. Le job lance Baluchon avec la variable `BALUCHON_BUBBLE=1` ; sans elle (`./start.sh`), rien ne change.
 - Gunicorn écoute sur `0.0.0.0` du nœud, pour que le tunnel puisse l'atteindre : Baluchon est joignable depuis le réseau interne du cluster pendant la session, protégé par sa page de connexion.

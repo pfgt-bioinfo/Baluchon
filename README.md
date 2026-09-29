@@ -27,6 +27,16 @@ En résumé (Mac / Linux) :
 ./start.sh     # démarre l'application sur http://localhost:8000
 ```
 
+## Utilisation sur le cluster (mode bubble)
+
+Baluchon peut aussi tourner sur un nœud de calcul du cluster, sur le modèle de pfgt-bubble : un job Slurm lance Baluchon dans une image Singularity, et un tunnel SSH l'ouvre dans votre navigateur comme en local. Vos données restent sur le cluster.
+
+```bash
+baluchon-bubble start   # démarre Baluchon sur un nœud et ouvre le navigateur
+```
+
+Installation et utilisation : voir **[bubble/README.md](bubble/README.md)**.
+
 ## Prérequis
 
 - Python 3.8 ou plus
