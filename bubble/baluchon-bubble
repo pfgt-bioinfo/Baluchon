@@ -64,6 +64,14 @@ config_get() {
   echo "${val}"
 }
 
+# comme config_get, mais renvoie une valeur vide si la clé est absente
+config_get_optional() {
+  local key="$1"
+  [[ -f "${CONFIG_FILE}" ]] || die "Pas de fichier de config. Lancez : baluchon-bubble configure"
+  grep -E "^[[:space:]]*${key}[[:space:]]*=" "${CONFIG_FILE}" | head -1 \
+    | sed -E "s/^[^=]+=[[:space:]]*//;s/[[:space:]]*$//" || true
+}
+
 # convertit un chemin de la config en chemin utilisable dans une commande distante :
 # "~/x" devient "$HOME/x" (expansé par le shell du cluster, entre guillemets doubles)
 to_remote() {
@@ -142,7 +150,7 @@ cmd_configure() {
     info "La config existe déjà : ${CONFIG_FILE}. Modifiez-la à la main ou supprimez-la d'abord."
     return 0
   fi
-  local host user local_port remote_dir image
+  local host user local_port remote_dir image partition
   read -r -p "Nom d'hôte du cluster (ex. gnomic.example.org) : " host
   read -r -p "Identifiant sur le cluster : " user
   read -r -p "Port local pour Baluchon [8000] : " local_port
@@ -151,6 +159,8 @@ cmd_configure() {
   remote_dir="${remote_dir:-~/baluchon-bubble/app}"
   read -r -p "Image Singularity sur le cluster [/data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images/python-3.11.sif] : " image
   image="${image:-/data/warehouse/pfgt/biosquad/PFGT_utils/apps/baluchon-bubble/images/python-3.11.sif}"
+  read -r -p "Partition Slurm [research] : " partition
+  partition="${partition:-research}"
 
   cat > "${CONFIG_FILE}" <<EOF
 # baluchon-bubble client config
@@ -159,6 +169,7 @@ user = ${user}
 local_port = ${local_port}
 remote_dir = ${remote_dir}
 image = ${image}
+partition = ${partition}
 EOF
   ok "Config écrite dans ${CONFIG_FILE}"
 }
@@ -186,6 +197,7 @@ Installation (une fois) :
 Session :
   start [--cpus N --mem XG --time HH:MM:SS --partition NAME]
                                         Démarre Baluchon et ouvre le navigateur
+                                        (partition par défaut : celle de la config)
   attach                                Se reconnecte à une session en cours
   stop                                  Arrête la session
   status                                Affiche la session en cours
@@ -258,7 +270,7 @@ cmd_deploy() {
   dest="${remote_dir#\~/}"
 
   remote "mkdir -p \"${RDIR}/uploads\" \"${RSTATE}/logs\""
-  info "Copie de ${src} vers ${host}:${remote_dir}"
+  info "Copie de ${src} vers ${user}@${host}:${remote_dir}"
   rsync -az \
     --exclude '.git/' \
     --exclude 'venv/' --exclude '.venv/' \
@@ -367,7 +379,8 @@ cmd_init() {
 # 6. ouvre le navigateur, reste au premier plan ; Ctrl+C = scancel + fermeture du tunnel
 
 cmd_start() {
-  local cpus="2" mem="4G" time="10:00:00" partition=""
+  local cpus="2" mem="4G" time="10:00:00" partition
+  partition=$(config_get_optional partition)
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cpus)      cpus="${2:-}"; shift 2 ;;

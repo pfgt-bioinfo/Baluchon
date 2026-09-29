@@ -65,7 +65,7 @@ cp bubble/baluchon-bubble ~/.local/bin/    # optionnel
 ## 2. Première utilisation
 
 ```bash
-baluchon-bubble configure   # hôte, identifiant, port local, chemins sur le cluster
+baluchon-bubble configure   # hôte, identifiant, port local, chemins, partition Slurm
 baluchon-bubble pull-image  # récupère l'image si elle n'existe pas encore (sinon ne fait rien)
 baluchon-bubble deploy      # copie le code sur le cluster (rsync)
 baluchon-bubble init        # installe les dépendances, crée .env, la base et le compte
@@ -78,7 +78,7 @@ baluchon-bubble init        # installe les dépendances, crée .env, la base et 
 ## 3. Au quotidien
 
 ```bash
-baluchon-bubble start                          # 2 CPU, 4G, 10h par défaut
+baluchon-bubble start                          # 2 CPU, 4G, 10h, partition de la config
 baluchon-bubble start --cpus 2 --mem 4G --time 12:00:00 --partition NAME
 
 # Ctrl+C dans le terminal ferme la session et annule le job, ou depuis ailleurs :
