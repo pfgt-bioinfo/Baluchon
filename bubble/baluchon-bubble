@@ -320,7 +320,8 @@ cmd_deps() {
   remote "test -f \"${RDIR}/requirements.txt\"" \
     || die "Baluchon n'est pas déployé. Lancez d'abord : baluchon-bubble deploy"
 
-  if ! remote "test -x \"${RDIR}/venv/bin/python\""; then
+  # venv/bin/python pointe vers le Python de l'image, absent de la frontale : on teste pyvenv.cfg
+  if ! remote "test -f \"${RDIR}/venv/pyvenv.cfg\""; then
     info "Création de l'environnement virtuel..."
     remote "$(container_cmd python3 -m venv venv)" || die "Échec de la création du venv"
   fi
@@ -359,10 +360,21 @@ cmd_init() {
   fi
 
   info "Initialisation de la base de données..."
-  remote "$(container_cmd venv/bin/python init_db.py)"
+  remote "$(container_cmd venv/bin/python init_db.py --no-hint)"
 
+  # compte déjà présent (init relancé) : on ne redemande le mot de passe que si on le veut
+  local users answer
+  users=$(remote "$(container_cmd venv/bin/python create_admin.py --list)") \
+    || die "Impossible de lire les comptes existants"
   echo
-  info "Création du compte de connexion :"
+  if [[ -n "${users}" ]]; then
+    ok "Compte(s) de connexion déjà présent(s) : $(echo ${users} | sed 's/ /, /g')"
+    read -r -p "Changer le mot de passe ? [o/N] " answer
+    [[ "${answer}" =~ ^[oOyY]$ ]] || return 0
+    info "Changement du mot de passe :"
+  else
+    info "Création du compte de connexion :"
+  fi
   remote_tty "$(container_cmd venv/bin/python create_admin.py)"
 }
 

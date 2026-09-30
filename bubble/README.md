@@ -71,6 +71,8 @@ baluchon-bubble deploy      # copie le code sur le cluster (rsync)
 baluchon-bubble init        # installe les dépendances, crée .env, la base et le compte
 ```
 
+`init` peut être relancé sans risque : il conserve le `.env`, la base et le venv existants. Si un compte de connexion existe déjà, il n'est pas recréé : `init` l'affiche et demande seulement « Changer le mot de passe ? [o/N] » (par défaut, rien n'est modifié).
+
 `pull-image`, `deploy` et `init` s'exécutent sur la frontale, qui a accès à internet (Docker Hub, PyPI). Les nœuds de calcul n'ont pas internet.
 
 `deploy` n'utilise jamais `--delete` et ne copie ni `.env`, ni `*.db`, ni `uploads/` : les données déjà présentes sur le cluster ne sont jamais écrasées. Relancez `deploy` après chaque mise à jour du code, puis redémarrez la session. Si `requirements.txt` a changé, lancez aussi `baluchon-bubble deps`.

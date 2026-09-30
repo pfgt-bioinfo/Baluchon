@@ -3,11 +3,18 @@ Crée (ou met à jour) le compte unique de connexion à Baluchon.
 À exécuter après la migration, avant le premier lancement avec gunicorn.
 
 Usage :
-    python create_admin.py
+    python create_admin.py           # create an account or change its password
+    python create_admin.py --list    # print existing usernames, one per line
 """
 import getpass
+import sys
 from app import app
 from models import db, User
+
+def list_users():
+    with app.app_context():
+        for user in User.query.order_by(User.username).all():
+            print(user.username)
 
 def main():
     with app.app_context():
@@ -38,4 +45,7 @@ def main():
             print(f"✓ Compte '{username}' créé avec succès.")
 
 if __name__ == '__main__':
-    main()
+    if '--list' in sys.argv[1:]:
+        list_users()
+    else:
+        main()
