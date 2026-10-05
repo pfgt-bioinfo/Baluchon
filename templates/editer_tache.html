@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import champ_tags %}
 {% block title %}Éditer la tâche{% endblock %}
 
 {% block content %}
@@ -28,12 +29,23 @@
                     <option value="en cours" {% if tache.statut == 'en cours' %}selected{% endif %}>En cours</option>
                     <option value="en attente" {% if tache.statut == 'en attente' %}selected{% endif %}>En attente</option>
                     <option value="terminé" {% if tache.statut == 'terminé' %}selected{% endif %}>Terminé</option>
+                    <option value="abandonné" {% if tache.statut == 'abandonné' %}selected{% endif %}>Abandonné</option>
                 </select>
             </div>
             <div class="col-md-6">
                 <label class="bal-label">Date limite</label>
                 <input type="date" class="bal-form-control" name="date_limite"
                        value="{{ tache.date_limite.strftime('%Y-%m-%d') if tache.date_limite else '' }}">
+            </div>
+        </div>
+        {{ champ_tags(tache.tags|replace(',', ', ') if tache.tags else '', tags_suggestions) }}
+        <div class="bal-form-group">
+            <label class="bal-label">Durée estimée</label>
+            <div class="d-flex align-items-center gap-2">
+                <input type="number" class="bal-form-control" name="jours" min="0" step="1" style="width:6rem;" placeholder="—"
+                       value="{{ tache.duree_jours_entiers if tache.duree_jours is not none else '' }}"> <span>jours</span>
+                <input type="number" class="bal-form-control" name="pct" min="0" max="99" step="1" style="width:6rem;" placeholder="—"
+                       value="{{ tache.duree_pourcent if tache.duree_jours is not none else '' }}"> <span>% de jour</span>
             </div>
         </div>
         <div class="bal-form-group">

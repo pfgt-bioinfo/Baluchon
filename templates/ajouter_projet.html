@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import champ_tags %}
 {% block title %}Nouveau projet{% endblock %}
 {% block content %}
 <div class="bal-breadcrumb">
@@ -17,9 +18,10 @@
             <input type="text" class="bal-form-control" id="nom" name="nom" required autofocus>
         </div>
         <div class="bal-form-group">
-            <label class="bal-label" for="chemin_rproj">Chemin vers le fichier .Rproj</label>
-            <input type="text" class="bal-form-control" id="chemin_rproj" name="chemin_rproj" placeholder="/chemin/vers/projet.Rproj">
+            <label class="bal-label" for="chemin_rproj">Chemin vers le fichier main <span class="text-muted">(optionnel)</span></label>
+            <input type="text" class="bal-form-control" id="chemin_rproj" name="chemin_rproj" placeholder="/chemin/vers/votre_fichier_principal">
         </div>
+        {{ champ_tags('', tags_suggestions) }}
         <div class="bal-form-group">
             <label class="bal-label" for="statut">Statut</label>
             <select class="bal-form-control" id="statut" name="statut">

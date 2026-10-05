@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Estimer le temps{% if projet %} — {{ projet.nom }}{% endif %}{% endblock %}
+
+{% block content %}
+{% if projet %}
+<div class="bal-breadcrumb">
+    <a href="{{ url_for('index') }}">Accueil</a><span class="sep">/</span>
+    <a href="{{ url_for('tous_les_projets') }}">Projets</a><span class="sep">/</span>
+    <a href="{{ url_for('projet_dashboard', projet_id=projet.id) }}">{{ projet.nom }}</a><span class="sep">/</span>
+    Estimer le temps
+</div>
+{% endif %}
+
+<div class="bal-page-header">
+    <div>
+        <h1><i class="bi bi-stopwatch me-2"></i>Estimer le temps{% if projet %} · {{ projet.nom }}{% endif %}</h1>
+        <div class="subtitle">Durée de chaque tâche en jours et en % de jour (ex : 2 j + 50 % = 2,5 jours)</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{% if projet %}{{ url_for('matrice_projet', projet_id=projet.id) }}{% else %}{{ url_for('matrice_globale') }}{% endif %}" class="btn-bal-outline">
+            <i class="bi bi-grid-3x3-gap"></i> Vue matrice
+        </a>
+        <a href="{% if projet %}{{ url_for('toutes_les_taches', projet_id=projet.id) }}{% else %}{{ url_for('vue_globale_taches') }}{% endif %}" class="btn-bal-ghost">
+            <i class="bi bi-list"></i> Vue liste
+        </a>
+    </div>
+</div>
+
+<div class="d-flex gap-2 mb-3">
+    <a href="?terminees=0" class="{{ 'btn-bal' if not avec_terminees else 'btn-bal-outline' }}" style="font-size:0.8rem;">Tâches ouvertes</a>
+    <a href="?" class="{{ 'btn-bal' if avec_terminees else 'btn-bal-outline' }}" style="font-size:0.8rem;">Toutes (avec terminées et abandonnées)</a>
+</div>
+
+{% if taches %}
+<form method="POST" action="{{ url_for('enregistrer_temps') }}">
+    <input type="hidden" name="retour" value="{{ request.full_path }}">
+    <div class="bal-card">
+        <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;">
+            <thead>
+                <tr style="border-bottom:2px solid var(--bal-border);font-size:0.8rem;text-transform:uppercase;color:var(--bal-muted);letter-spacing:.04em;">
+                    <th style="padding:0.5rem 0.6rem;text-align:left;">Tâche</th>
+                    <th style="padding:0.5rem 0.6rem;text-align:left;">Priorité</th>
+                    <th style="padding:0.5rem 0.6rem;text-align:left;">Échéance</th>
+                    <th style="padding:0.5rem 0.6rem;text-align:left;">Jours</th>
+                    <th style="padding:0.5rem 0.6rem;text-align:left;">% de jour</th>
+                    <th style="padding:0.5rem 0.6rem;text-align:right;">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for t in taches %}
+            <tr style="border-bottom:1px solid var(--bal-border);{% if t.statut == 'abandonné' %}opacity:0.55;{% endif %}" data-tache{% if t.statut == 'abandonné' %} data-abandonnee="1"{% endif %}>
+                <td style="padding:0.6rem;">
+                    <input type="hidden" name="ids" value="{{ t.id }}">
+                    <div>{{ t.description|truncate(90) }}{% if t.statut == 'terminé' %} <span class="text-muted small">(terminée)</span>{% elif t.statut == 'abandonné' %} <span class="text-muted small">(abandonnée — hors total)</span>{% endif %}</div>
+                    {% if not projet %}
+                    <a href="{{ url_for('temps_projet', projet_id=t.projet_id) }}" class="text-muted" style="font-size:0.78rem;text-decoration:none;"><i class="bi bi-folder2 me-1"></i>{{ t.projet.nom }}</a>
+                    {% endif %}
+                </td>
+                <td style="padding:0.6rem;"><span class="priorite-badge priorite-{{ t.priorite or 'a_planifier' }}">{{ PRIORITES_LABELS[t.priorite or 'a_planifier'] }}</span></td>
+                <td style="padding:0.6rem;font-size:0.85rem;color:var(--bal-muted);">{{ t.date_limite.strftime('%d/%m/%Y') if t.date_limite else '—' }}</td>
+                <td style="padding:0.6rem;">
+                    <input type="number" class="bal-form-control champ-jours" name="jours_{{ t.id }}" min="0" step="1" style="width:6rem;"
+                           value="{{ t.duree_jours_entiers if t.duree_jours is not none else '' }}" placeholder="—">
+                </td>
+                <td style="padding:0.6rem;">
+                    <input type="number" class="bal-form-control champ-pct" name="pct_{{ t.id }}" min="0" max="99" step="1" style="width:6rem;"
+                           value="{{ t.duree_pourcent if t.duree_jours is not none else '' }}" placeholder="—">
+                </td>
+                <td style="padding:0.6rem;text-align:right;white-space:nowrap;" class="total-ligne">{{ t.duree_jours|duree }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr style="border-top:2px solid var(--bal-border);font-weight:600;">
+                    <td style="padding:0.6rem;" colspan="5" class="text-end">Total estimé · <span id="nb-sans" class="text-muted" style="font-weight:400;"></span></td>
+                    <td style="padding:0.6rem;text-align:right;white-space:nowrap;" id="total-general">{{ total|duree }}</td>
+                </tr>
+            </tfoot>
+        </table>
+        </div>
+        <div class="mt-3 d-flex justify-content-end">
+            <button type="submit" class="btn-bal"><i class="bi bi-check-lg"></i> Enregistrer les estimations</button>
+        </div>
+    </div>
+</form>
+{% else %}
+<div class="bal-empty">
+    <i class="bi bi-stopwatch"></i>
+    Aucune tâche à estimer.
+</div>
+{% endif %}
+
+<script>
+// Total par ligne et total général, mis à jour en direct (en centièmes de jour pour éviter les erreurs d'arrondi)
+function formatDuree(centiemes) {
+    const j = Math.floor(centiemes / 100), p = centiemes % 100;
+    const morceaux = (j ? [j + ' j'] : []).concat(p ? [p + ' %'] : []);
+    return morceaux.join(' ') || '0';
+}
+function recalculer() {
+    let total = 0, sans = 0;
+    document.querySelectorAll('tr[data-tache]').forEach(tr => {
+        const j = tr.querySelector('.champ-jours').value, p = tr.querySelector('.champ-pct').value;
+        const vide = j === '' && p === '';
+        const c = Math.round(parseFloat(j || 0) * 100) + Math.round(parseFloat(p || 0));
+        tr.querySelector('.total-ligne').textContent = vide ? '—' : formatDuree(c);
+        if (tr.dataset.abandonnee) return;   // une tâche abandonnée ne compte pas dans les totaux
+        if (vide) sans++; else total += c;
+    });
+    document.getElementById('total-general').textContent = formatDuree(total);
+    document.getElementById('nb-sans').textContent = sans ? sans + ' tâche' + (sans > 1 ? 's' : '') + ' sans estimation' : '';
+}
+document.querySelectorAll('.champ-jours, .champ-pct').forEach(i => i.addEventListener('input', recalculer));
+recalculer();
+</script>
+{% endblock %}

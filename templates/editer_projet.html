@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import champ_tags %}
 {% block title %}Éditer — {{ projet.nom }}{% endblock %}
 {% block content %}
 <div class="bal-breadcrumb">
@@ -23,9 +24,10 @@
             <input type="text" class="bal-form-control" id="nom" name="nom" value="{{ projet.nom }}" required>
         </div>
         <div class="bal-form-group">
-            <label class="bal-label" for="chemin_rproj">Chemin vers le fichier .Rproj</label>
+            <label class="bal-label" for="chemin_rproj">Chemin vers le fichier main <span class="text-muted">(optionnel)</span></label>
             <input type="text" class="bal-form-control" id="chemin_rproj" name="chemin_rproj" value="{{ projet.chemin_rproj or '' }}">
         </div>
+        {{ champ_tags(projet.tags|replace(',', ', ') if projet.tags else '', tags_suggestions) }}
         <div class="bal-form-group">
             <label class="bal-label" for="statut">Statut</label>
             <select class="bal-form-control" id="statut" name="statut">

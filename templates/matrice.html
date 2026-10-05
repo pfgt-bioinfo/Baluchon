@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import badge_duree, badges_tags_tache %}
 {% block title %}Matrice Eisenhower{% if projet %} — {{ projet.nom }}{% endif %}{% endblock %}
 
 {% block content %}
@@ -14,11 +15,16 @@
 <div class="bal-page-header">
     <div>
         <h1><i class="bi bi-grid-3x3-gap me-2"></i>Matrice Eisenhower{% if projet %} · {{ projet.nom }}{% endif %}</h1>
-        <div class="subtitle">Tâches non terminées classées par priorité</div>
+        <div class="subtitle">Tâches ouvertes (ni terminées, ni abandonnées) classées par priorité</div>
     </div>
-    <a href="{% if projet %}{{ url_for('toutes_les_taches', projet_id=projet.id) }}{% else %}{{ url_for('vue_globale_taches') }}{% endif %}" class="btn-bal-ghost">
-        <i class="bi bi-list"></i> Vue liste
-    </a>
+    <div class="d-flex gap-2">
+        <a href="{% if projet %}{{ url_for('temps_projet', projet_id=projet.id) }}{% else %}{{ url_for('temps_global') }}{% endif %}" class="btn-bal-outline">
+            <i class="bi bi-stopwatch"></i> Estimer temps
+        </a>
+        <a href="{% if projet %}{{ url_for('toutes_les_taches', projet_id=projet.id) }}{% else %}{{ url_for('vue_globale_taches') }}{% endif %}" class="btn-bal-ghost">
+            <i class="bi bi-list"></i> Vue liste
+        </a>
+    </div>
 </div>
 
 {% macro carte_tache_mini(t, projet_visible) %}
@@ -33,6 +39,8 @@
         {% if t.date_limite %}
         <small class="text-muted">{{ t.date_limite.strftime('%d/%m') }}</small>
         {% endif %}
+        {{ badge_duree(t) }}
+        {{ badges_tags_tache(t) }}
         {% if t.urgence_deadline == 'imminente' %}
         <span class="deadline-flag deadline-imminente"><i class="bi bi-alarm"></i> Bientôt</span>
         {% elif t.urgence_deadline == 'depassee' %}
@@ -49,6 +57,16 @@
     </div>
 </div>
 {% endmacro %}
+
+{% if tags_dispos or tag_filtre %}
+<div class="d-flex flex-wrap gap-1 align-items-center mb-3">
+    <small class="text-muted me-1">Tag :</small>
+    <a href="{{ url_for('matrice_projet', projet_id=projet.id) if projet else url_for('matrice_globale') }}" class="btn-bal-{{ 'outline' if not tag_filtre else 'ghost' }}" style="font-size:0.8rem;">Tous</a>
+    {% for tag, nb in tags_dispos %}
+    <a href="{{ url_for('matrice_projet', projet_id=projet.id, tag=tag) if projet else url_for('matrice_globale', tag=tag) }}" class="tag-projet {{ 'actif' if tag_filtre|lower == tag|lower }}"><i class="bi bi-tag me-1"></i>{{ tag }} ({{ nb }})</a>
+    {% endfor %}
+</div>
+{% endif %}
 
 <div class="matrice-grid">
     <div class="matrice-quadrant q-urgent_important">

@@ -204,6 +204,7 @@
         .tache-en-cours { background: #fef3e2; color: #8a5f1a; }
         .tache-attente, .tache-en-attente  { background: #e3f0fb; color: #1a5276; }
         .tache-termine, [class*="tache-termin"] { background: #e3f4ea; color: #2d6a3f; }
+        [class*="tache-abandon"] { background: #f3ecec; color: #8a6a6a; text-decoration: line-through; }
 
         /* ── Listes items ── */
         .bal-list-item {
@@ -315,6 +316,7 @@
         .statut-select.s-en-cours { background: #fef3e2; color: #8a5f1a; border-color: #f5d7a0; }
         .statut-select.s-attente  { background: #e3f0fb; color: #1a5276; border-color: #a8d0ee; }
         .statut-select.s-termine  { background: #e8f5ec; color: #2d6a3f; border-color: #b7dfbf; }
+        .statut-select.s-abandonne { background: #f3ecec; color: #8a6a6a; border-color: #dcc9c9; }
         .statut-select {
             border: 1px solid var(--bal-border);
             border-radius: 5px;
@@ -338,6 +340,30 @@
         .priorite-important        { background: #e3f0fb; color: #1a5276; }
         .priorite-urgent           { background: #fef3e2; color: #8a5f1a; }
         .priorite-a_planifier      { background: #f0f0f0; color: #666; }
+
+        /* ── Tags des projets ── */
+        .tag-projet {
+            display: inline-block; padding: 0.1rem 0.6rem; border-radius: 20px;
+            font-size: 0.75rem; font-weight: 500; background: #eef1f6; color: #475569; text-decoration: none; white-space: nowrap;
+        }
+        a.tag-projet:hover { background: #dfe6f0; color: var(--bal-accent); }
+        .tag-projet.actif { background: var(--bal-accent); color: #fff; }
+
+        /* ── Code couleur des infos : local / uploadé / web / personne ── */
+        .info-local    { --info-c: #2f7d55; --info-bg: #e7f4ed; }
+        .info-upload   { --info-c: #2563a8; --info-bg: #e8f0f9; }
+        .info-web      { --info-c: #b0661a; --info-bg: #fdf0e1; }
+        .info-personne { --info-c: #7a4bb0; --info-bg: #f1eafa; }
+        .pastille-info {
+            display: inline-flex; align-items: center; gap: 0.35rem;
+            padding: 0.12rem 0.6rem; border-radius: 20px;
+            font-size: 0.78rem; font-weight: 500; white-space: nowrap;
+            background: var(--info-bg); color: var(--info-c);
+        }
+        .ligne-info > td:first-child { border-left: 4px solid var(--info-c); }
+        .puce-info { border-left: 4px solid var(--info-c) !important; }
+        .puce-info > i:first-child { color: var(--info-c) !important; }
+        .point-info { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--info-c); margin-right: 0.35rem; }
 
         /* ── Indicateur deadline ── */
         .deadline-flag {
@@ -409,8 +435,8 @@
         <a href="{{ url_for('vue_globale_taches') }}" class="{{ 'active' if request.endpoint in ['vue_globale_taches','toutes_les_taches','editer_tache'] }}">
             <i class="bi bi-check2-square"></i> Tâches
         </a>
-        <a href="{{ url_for('vue_globale_fichiers') }}" class="{{ 'active' if request.endpoint in ['vue_globale_fichiers','tous_les_fichiers'] }}">
-            <i class="bi bi-paperclip"></i> Fichiers
+        <a href="{{ url_for('vue_globale_infos') }}" class="{{ 'active' if request.endpoint in ['vue_globale_infos','toutes_les_infos','tous_les_fichiers','editer_lien'] }}">
+            <i class="bi bi-info-circle"></i> Infos
         </a>
         <a href="{{ url_for('stats') }}" class="{{ 'active' if request.endpoint == 'stats' }}">
             <i class="bi bi-bar-chart"></i> Stats

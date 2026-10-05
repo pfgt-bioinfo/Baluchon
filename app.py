@@ -3,10 +3,12 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from config import Config
 from models import (db, Projet, Evenement, Tache, LienProjet, User,
-                     STATUTS_PROJET, PRIORITES_TACHE, PRIORITES_LABELS,
-                     TYPES_LIEN, TYPES_LIEN_LABELS)
+                     STATUTS_PROJET, STATUTS_TACHE, STATUTS_TACHE_CLOS, PRIORITES_TACHE, PRIORITES_LABELS,
+                     TYPES_LIEN, TYPES_LIEN_LABELS, CATEGORIE_LIEN, ICONES_LIEN, normaliser_tags)
 from datetime import datetime, timedelta
 import os
+import re
+import sys
 import subprocess
 from werkzeug.utils import secure_filename
 from sqlalchemy.orm import joinedload
@@ -104,6 +106,8 @@ def filesizeformat(value):
 
 # ── Contexte global ──────────────────────────────────────────────────────────
 
+app.jinja_env.globals.update(CATEGORIE_LIEN=CATEGORIE_LIEN, ICONES_LIEN=ICONES_LIEN, TYPES_LIEN_LABELS=TYPES_LIEN_LABELS)
+
 @app.context_processor
 def inject_globals():
     return dict(
@@ -128,12 +132,12 @@ def index():
     ).order_by(Evenement.date.asc()).limit(5).all()
 
     taches_a_venir = Tache.query.filter(
-        Tache.statut != 'terminé'
+        Tache.statut.notin_(STATUTS_TACHE_CLOS)
     ).order_by(Tache.date_limite.asc().nullslast()).limit(5).all()
 
     nb_projets_en_cours = Projet.query.filter_by(statut='en cours').count()
     nb_projets_en_attente = Projet.query.filter_by(statut='en attente').count()
-    nb_taches_ouvertes = Tache.query.filter(Tache.statut != 'terminé').count()
+    nb_taches_ouvertes = Tache.query.filter(Tache.statut.notin_(STATUTS_TACHE_CLOS)).count()
     nb_evenements_a_venir = Evenement.query.filter(Evenement.date >= datetime.utcnow()).count()
     nb_fichiers = LienProjet.query.filter_by(type='upload').count()
 
@@ -241,9 +245,46 @@ def _graduations_mois(date_debut, date_fin):
             courant = datetime(courant.year, courant.month + 1, 1)
     return graduations
 
-@app.route('/stats')
-@login_required
-def stats():
+def calculer_avancement(taches):
+    """Avancement d'un ensemble de tâches : réalisées/restantes, et temps (durées estimées) passé/restant.
+    Le temps passé = durée estimée des tâches terminées ; les tâches sans estimation ne comptent pas dans le temps.
+    Les tâches abandonnées sortent du calcul (ni réalisées, ni restantes) : seul leur nombre est renvoyé."""
+    abandonnees = [t for t in taches if t.statut == 'abandonné']
+    taches = [t for t in taches if t.statut != 'abandonné']
+    terminees = [t for t in taches if t.statut == 'terminé']
+    restantes = [t for t in taches if t.statut != 'terminé']
+    temps_fait = sum(t.duree_jours or 0 for t in terminees)
+    temps_restant = sum(t.duree_jours or 0 for t in restantes)
+    return {
+        'nb_total': len(taches),
+        'nb_terminees': len(terminees),
+        'nb_restantes': len(restantes),
+        'temps_fait': temps_fait,
+        'temps_restant': temps_restant,
+        'temps_total': temps_fait + temps_restant,
+        'nb_sans_estimation': sum(1 for t in taches if t.duree_jours is None),
+        'nb_abandonnees': len(abandonnees),
+    }
+
+# Colonnes du tableau « Projets sur la période » : (clé, libellé, affichée par défaut)
+COLONNES_STATS = [
+    ('etat', 'État', True),
+    ('periode', "Période d'activité", True),
+    ('duree', 'Durée (jours)', True),
+    ('evt', 'Événements', True),
+    ('taches', 'Tâches créées (période)', True),
+    ('total', 'Total activité', True),
+    ('pct_taches', '% tâches', True),
+    ('pct_temps', '% temps', True),
+    ('nb_faites', 'Tâches réalisées', False),
+    ('nb_restantes', 'Tâches restantes', False),
+    ('temps_fait', 'Temps passé (jours)', False),
+    ('temps_restant', 'Temps restant (jours)', False),
+    ('temps_total', 'Temps estimé total (jours)', False),
+    ('tags', 'Tags', False),
+]
+
+def _calcul_stats():
     date_debut_str = request.args.get('date_debut', '')
     date_fin_str = request.args.get('date_fin', '')
 
@@ -327,13 +368,15 @@ def stats():
             'debut_reel': item['debut_reel'],
             'fin_reel': item['fin_reel'],
             'duree_jours': duree_jours,
+            'avancement': calculer_avancement(p.taches),
         })
 
     bilan_projets.sort(key=lambda x: -x['nb_activite'])
+    avancement_global = calculer_avancement([t for item in bilan_projets for t in item['projet'].taches])
 
     graduations_mois = _graduations_mois(date_debut, date_fin)
 
-    return render_template('stats.html',
+    return dict(
         date_debut=date_debut_str,
         date_fin=date_fin_str,
         date_debut_dt=date_debut,
@@ -345,9 +388,80 @@ def stats():
         nb_projets_en_cours_actuellement=nb_projets_en_cours_actuellement,
         nb_evenements_periode=evenements_periode_count,
         bilan_projets=bilan_projets,
+        avancement_global=avancement_global,
+        colonnes=COLONNES_STATS,
     )
 
+@app.route('/stats')
+@login_required
+def stats():
+    return render_template('stats.html', **_calcul_stats())
+
+def _valeur_colonne(cle, item):
+    """Valeur brute d'une colonne du tableau pour un projet (pour l'export)."""
+    av = item['avancement']
+    pct = lambda fait, total: round(fait / total * 100) if total else ''
+    return {
+        'etat': item['etat_periode'],
+        'periode': f"{item['debut_reel'].strftime('%d/%m/%Y')} → {item['fin_reel'].strftime('%d/%m/%Y')}",
+        'duree': item['duree_jours'],
+        'evt': item['nb_evenements'],
+        'taches': item['nb_taches'],
+        'total': item['nb_activite'],
+        'pct_taches': pct(av['nb_terminees'], av['nb_total']),
+        'pct_temps': pct(av['temps_fait'], av['temps_total']),
+        'nb_faites': av['nb_terminees'],
+        'nb_restantes': av['nb_restantes'],
+        'temps_fait': round(av['temps_fait'], 2) if av['temps_total'] else '',
+        'temps_restant': round(av['temps_restant'], 2) if av['temps_total'] else '',
+        'temps_total': round(av['temps_total'], 2) if av['temps_total'] else '',
+        'tags': ', '.join(item['projet'].liste_tags),
+    }[cle]
+
+@app.route('/stats/export')
+@login_required
+def stats_export():
+    """Export CSV du tableau « Projets sur la période » (même période, colonnes choisies via ?cols=a,b,c)."""
+    import csv, io
+    from flask import Response
+    donnees = _calcul_stats()
+    demandees = request.args.get('cols')
+    if demandees is None:
+        cles = [c for c, _, defaut in COLONNES_STATS if defaut]
+    else:
+        voulues = set(demandees.split(','))
+        cles = [c for c, _, _ in COLONNES_STATS if c in voulues]
+    libelles = {c: l for c, l, _ in COLONNES_STATS}
+
+    def texte_sur(valeur):
+        # Évite qu'un tableur interprète un nom commençant par = + - @ comme une formule
+        if isinstance(valeur, str) and valeur[:1] in ('=', '+', '-', '@'):
+            return "'" + valeur
+        # Virgule décimale : s'ouvre correctement dans Excel/LibreOffice en français
+        return str(valeur).replace('.', ',') if isinstance(valeur, float) else valeur
+
+    sortie = io.StringIO()
+    ecrivain = csv.writer(sortie, delimiter=';')
+    ecrivain.writerow(['Projet'] + [libelles[c] for c in cles])
+    for item in donnees['bilan_projets']:
+        ecrivain.writerow([texte_sur(item['projet'].nom)] + [texte_sur(_valeur_colonne(c, item)) for c in cles])
+
+    nom = f"baluchon_stats_{donnees['date_debut']}_{donnees['date_fin']}.csv"
+    return Response('\ufeff' + sortie.getvalue(), mimetype='text/csv; charset=utf-8',
+                    headers={'Content-Disposition': f'attachment; filename="{nom}"'})
+
 # ── Projets ──────────────────────────────────────────────────────────────────
+
+def tags_existants(projets):
+    """[(tag, nb_projets)] pour ces projets, regroupés sans tenir compte de la casse (première graphie conservée),
+    du plus utilisé au moins utilisé."""
+    noms, compte = {}, {}
+    for p in projets:
+        for t in p.liste_tags:
+            cle = t.casefold()
+            noms.setdefault(cle, t)
+            compte[cle] = compte.get(cle, 0) + 1
+    return sorted(((noms[c], n) for c, n in compte.items()), key=lambda x: (-x[1], x[0].casefold()))
 
 @app.route('/projets')
 @login_required
@@ -356,9 +470,18 @@ def tous_les_projets():
     statut_filtre = request.args.get('statut', 'en cours')
     per_page = 10
 
+    tag_filtre = request.args.get('tag', '').strip()
+
     query = Projet.query.order_by(Projet.date_creation.desc())
     if statut_filtre and statut_filtre != 'tous':
         query = query.filter_by(statut=statut_filtre)
+
+    # Tags proposés en filtre : ceux des projets du statut choisi ; filtre fait en Python (casse et accents corrects)
+    projets_du_statut = query.all()
+    tags_dispos = tags_existants(projets_du_statut)
+    if tag_filtre:
+        ids = [p.id for p in projets_du_statut if tag_filtre.casefold() in {t.casefold() for t in p.liste_tags}]
+        query = query.filter(Projet.id.in_(ids))
 
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     projets = pagination.items
@@ -367,6 +490,8 @@ def tous_les_projets():
         projets=projets,
         pagination=pagination,
         statut_filtre=statut_filtre,
+        tag_filtre=tag_filtre,
+        tags_dispos=tags_dispos,
     )
 
 @app.route('/ajouter_projet', methods=['GET', 'POST'])
@@ -377,12 +502,13 @@ def ajouter_projet():
         description = request.form['description']
         chemin_rproj = request.form['chemin_rproj']
         statut = request.form.get('statut', 'en cours')
-        projet = Projet(nom=nom, description=description, chemin_rproj=chemin_rproj, statut=statut)
+        projet = Projet(nom=nom, description=description, chemin_rproj=chemin_rproj, statut=statut,
+                        tags=','.join(normaliser_tags(request.form.get('tags'))) or None)
         db.session.add(projet)
         db.session.commit()
         flash('Projet ajouté avec succès.', 'success')
         return redirect(url_for('projet_dashboard', projet_id=projet.id))
-    return render_template('ajouter_projet.html')
+    return render_template('ajouter_projet.html', tags_suggestions=tags_existants(Projet.query.all()))
 
 @app.route('/projet/<int:projet_id>/editer', methods=['GET', 'POST'])
 @login_required
@@ -393,10 +519,11 @@ def editer_projet(projet_id):
         projet.description = request.form['description']
         projet.chemin_rproj = request.form['chemin_rproj']
         projet.statut = request.form.get('statut', projet.statut)
+        projet.tags = ','.join(normaliser_tags(request.form.get('tags'))) or None
         db.session.commit()
         flash('Les informations du projet ont été mises à jour.', 'success')
         return redirect(url_for('projet_dashboard', projet_id=projet_id))
-    return render_template('editer_projet.html', projet=projet)
+    return render_template('editer_projet.html', projet=projet, tags_suggestions=tags_existants(Projet.query.all()))
 
 @app.route('/projet/<int:projet_id>/supprimer', methods=['POST'])
 @login_required
@@ -412,39 +539,75 @@ def supprimer_projet(projet_id):
 def projet_dashboard(projet_id):
     projet = Projet.query.get_or_404(projet_id)
     taches_non_terminees = Tache.query.filter_by(projet_id=projet_id)\
-        .filter(Tache.statut != 'terminé')\
+        .filter(Tache.statut.notin_(STATUTS_TACHE_CLOS))\
         .order_by(Tache.date_limite.asc().nullslast()).all()
     debut_jour = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     evenements_a_venir = Evenement.query.filter_by(projet_id=projet_id)\
         .filter(Evenement.date >= debut_jour)\
         .order_by(Evenement.date.asc()).limit(5).all()
+    avancement = calculer_avancement(Tache.query.filter_by(projet_id=projet_id).all())
     return render_template('projet_dashboard.html',
         projet=projet,
         taches_non_terminees=taches_non_terminees,
         evenements_a_venir=evenements_a_venir,
+        avancement=avancement,
     )
+
+def ouvrir_localement(chemin):
+    """Ouvre un fichier ou un dossier avec l'application par défaut du système.
+    Retourne (ok, message). Ne fonctionne que si Baluchon tourne sur la machine de l'utilisateur."""
+    if not chemin or not os.path.exists(chemin):
+        return False, f"Chemin introuvable : {chemin or '(non défini)'}"
+    try:
+        if os.name == 'nt':
+            os.startfile(chemin)
+        else:
+            commande = 'open' if sys.platform == 'darwin' else 'xdg-open'
+            subprocess.Popen([commande, chemin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        return False, f"Impossible d'ouvrir le chemin sur ce système : {e}"
+    return True, None
+
+def retour_sur_place(defaut):
+    """Redirige vers le paramètre 'retour' s'il s'agit d'un chemin local au site, sinon vers `defaut`."""
+    retour = request.values.get('retour', '')
+    if retour.startswith('/') and not retour.startswith('//'):
+        return redirect(retour)
+    return redirect(defaut)
 
 @app.route('/ouvrir_projet/<int:projet_id>')
 @login_required
 def ouvrir_projet(projet_id):
     projet = Projet.query.get_or_404(projet_id)
-    chemin_rproj = os.path.abspath(projet.chemin_rproj)
-    if os.name == 'posix':
-        subprocess.run(['open', chemin_rproj])
-    elif os.name == 'nt':
-        subprocess.run(['start', '', chemin_rproj], shell=True)
-    return redirect(url_for('projet_dashboard', projet_id=projet_id))
+    ok, message = ouvrir_localement(os.path.abspath(projet.chemin_rproj) if projet.chemin_rproj else None)
+    if not ok:
+        flash(message, 'danger')
+    return retour_sur_place(url_for('projet_dashboard', projet_id=projet_id))
 
 @app.route('/ouvrir_dossier/<int:projet_id>')
 @login_required
 def ouvrir_dossier(projet_id):
     projet = Projet.query.get_or_404(projet_id)
-    dossier_projet = os.path.dirname(os.path.abspath(projet.chemin_rproj))
-    if os.name == 'posix':
-        subprocess.run(['open', dossier_projet])
-    elif os.name == 'nt':
-        subprocess.run(['explorer', dossier_projet])
-    return redirect(url_for('projet_dashboard', projet_id=projet_id))
+    dossier = os.path.dirname(os.path.abspath(projet.chemin_rproj)) if projet.chemin_rproj else None
+    ok, message = ouvrir_localement(dossier)
+    if not ok:
+        flash(message, 'danger')
+    return retour_sur_place(url_for('projet_dashboard', projet_id=projet_id))
+
+@app.route('/lien/<int:lien_id>/ouvrir', methods=['POST'])
+@login_required
+def ouvrir_lien(lien_id):
+    """Ouvre en local le dossier ou le fichier d'une info ('cible' = 'chemin' ou 'dossier')."""
+    lien = LienProjet.query.get_or_404(lien_id)
+    if lien.type not in ('dossier', 'fichier_local'):
+        abort(400)
+    chemin = os.path.abspath(lien.valeur) if lien.valeur else None
+    if chemin and request.form.get('cible') == 'dossier' and lien.type == 'fichier_local':
+        chemin = os.path.dirname(chemin)
+    ok, message = ouvrir_localement(chemin)
+    if not ok:
+        flash(message, 'danger')
+    return retour_sur_place(url_for('toutes_les_infos', projet_id=lien.projet_id))
 
 # ── Liens / Infos du projet ──────────────────────────────────────────────────
 
@@ -499,6 +662,9 @@ def ajouter_lien(projet_id):
         valeur = request.form.get('valeur', '').strip()
         if not valeur:
             flash('Veuillez renseigner une valeur pour cette info.', 'danger')
+            return redirect(url_for('projet_dashboard', projet_id=projet_id))
+        if type_lien == 'personne' and '@' not in valeur:
+            flash("Adresse email invalide.", 'danger')
             return redirect(url_for('projet_dashboard', projet_id=projet_id))
         lien.valeur = valeur
 
@@ -574,6 +740,9 @@ def editer_lien(lien_id):
         # On ne change pas le type ni un fichier uploadé, seulement l'intitulé/commentaire/valeur (si non-upload)
         if lien.type != 'upload':
             nouvelle_valeur = request.form.get('valeur', '').strip()
+            if lien.type == 'personne' and nouvelle_valeur and '@' not in nouvelle_valeur:
+                flash("Adresse email invalide.", 'danger')
+                return redirect(url_for('editer_lien', lien_id=lien.id, retour=request.form.get('retour', '')))
             if nouvelle_valeur:
                 lien.valeur = nouvelle_valeur
         db.session.commit()
@@ -589,9 +758,16 @@ def editer_lien(lien_id):
 @login_required
 def toutes_les_infos(projet_id):
     projet = Projet.query.get_or_404(projet_id)
-    infos = LienProjet.query.filter_by(projet_id=projet_id)\
+    toutes = LienProjet.query.filter_by(projet_id=projet_id)\
         .order_by(LienProjet.est_epingle.desc(), LienProjet.date_creation.desc()).all()
-    return render_template('toutes_les_infos.html', projet=projet, infos=infos)
+    # Filtre par type ('main' = le fichier main du projet, qui n'est pas un LienProjet)
+    filtre = request.args.get('type')
+    if filtre not in TYPES_LIEN + ['main']:
+        filtre = None
+    infos = [i for i in toutes if filtre in (None, i.type)] if filtre != 'main' else []
+    compteurs = {t: sum(1 for i in toutes if i.type == t) for t in TYPES_LIEN}
+    return render_template('toutes_les_infos.html', projet=projet, infos=infos,
+                           filtre=filtre, compteurs=compteurs, total=len(toutes))
 
 @app.route('/lien/<int:lien_id>/verifier', methods=['POST'])
 @login_required
@@ -613,6 +789,11 @@ def verifier_lien(lien_id):
             resultat = {'ok': True, 'message': 'Chemin existant'}
         else:
             resultat = {'ok': False, 'message': 'Chemin introuvable'}
+    elif lien.type == 'personne':
+        if lien.valeur and re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', lien.valeur):
+            resultat = {'ok': True, 'message': 'Adresse email valide'}
+        else:
+            resultat = {'ok': False, 'message': 'Adresse email invalide ou absente'}
     elif lien.type == 'upload':
         if lien.valeur and os.path.exists(lien.valeur):
             resultat = {'ok': True, 'message': 'Fichier présent'}
@@ -908,25 +1089,43 @@ def tous_les_fichiers(projet_id):
 @app.route('/fichiers')
 @login_required
 def vue_globale_fichiers():
+    """Ancienne page « Fichiers » : remplacée par la page Infos filtrée sur les fichiers uploadés."""
+    return redirect(url_for('vue_globale_infos', type='upload'))
+
+@app.route('/infos')
+@login_required
+def vue_globale_infos():
+    """Toutes les infos de tous les projets (filtrables par projet et par type)."""
     page = request.args.get('page', 1, type=int)
     projet_id_filtre = request.args.get('projet_id', 0, type=int)
-    query = LienProjet.query.options(joinedload(LienProjet.evenement), joinedload(LienProjet.projet))\
-        .filter_by(type='upload')
+    filtre = request.args.get('type')
+    if filtre not in TYPES_LIEN:
+        filtre = None
+
+    base = LienProjet.query
     if projet_id_filtre:
-        query = query.filter_by(projet_id=projet_id_filtre)
-    query = query.order_by(LienProjet.date_creation.desc())
+        base = base.filter_by(projet_id=projet_id_filtre)
+    # Compteurs par type (pour les boutons de filtre), sur le projet choisi
+    compteurs = {t: 0 for t in TYPES_LIEN}
+    compteurs.update(dict(base.with_entities(LienProjet.type, func.count(LienProjet.id)).group_by(LienProjet.type).all()))
+
+    query = base.options(joinedload(LienProjet.projet), joinedload(LienProjet.evenement))
+    if filtre:
+        query = query.filter(LienProjet.type == filtre)
+    query = query.order_by(LienProjet.est_epingle.desc(), LienProjet.date_creation.desc())
     pagination = query.paginate(page=page, per_page=20, error_out=False)
-    projets = Projet.query.order_by(Projet.nom).all()
-    return render_template('vue_globale_fichiers.html',
-        fichiers=pagination.items,
+    return render_template('infos_globales.html',
+        infos=pagination.items,
         pagination=pagination,
-        projets=projets,
+        projets=Projet.query.order_by(Projet.nom).all(),
         projet_id_filtre=projet_id_filtre,
+        filtre=filtre,
+        compteurs=compteurs,
+        total=sum(compteurs.values()),
     )
 
 # ── Tâches ───────────────────────────────────────────────────────────────────
 
-STATUTS_TACHE = ['à faire', 'en cours', 'en attente', 'terminé']
 PER_PAGE_TACHE = 15
 
 @app.route('/projet/<int:projet_id>/taches')
@@ -946,10 +1145,17 @@ def _vue_taches(projet_id=None, projet=None):
     priorite_filtre = request.args.get('priorite', '')
     date_debut = request.args.get('date_debut', '')
     date_fin = request.args.get('date_fin', '')
+    tag_filtre = request.args.get('tag', '').strip()
 
     query = Tache.query.options(joinedload(Tache.projet))
     if projet_id:
         query = query.filter_by(projet_id=projet_id)
+    # Tags proposés en filtre : ceux des tâches du périmètre (projet ou global) ; filtre fait en Python (casse et accents corrects)
+    taches_du_perimetre = query.all()
+    tags_dispos = tags_existants(taches_du_perimetre)
+    if tag_filtre:
+        ids = [t.id for t in taches_du_perimetre if tag_filtre.casefold() in {x.casefold() for x in t.liste_tags}]
+        query = query.filter(Tache.id.in_(ids))
     if statut_filtre:
         query = query.filter(Tache.statut == statut_filtre)
     if priorite_filtre:
@@ -980,6 +1186,8 @@ def _vue_taches(projet_id=None, projet=None):
         priorite_filtre=priorite_filtre,
         date_debut=date_debut,
         date_fin=date_fin,
+        tag_filtre=tag_filtre,
+        tags_dispos=tags_dispos,
         statuts=STATUTS_TACHE,
         tous_projets=tous_projets,
     )
@@ -996,16 +1204,95 @@ def matrice_globale():
     return _vue_matrice()
 
 def _vue_matrice(projet_id=None, projet=None):
-    query = Tache.query.options(joinedload(Tache.projet)).filter(Tache.statut != 'terminé')
+    query = Tache.query.options(joinedload(Tache.projet)).filter(Tache.statut.notin_(STATUTS_TACHE_CLOS))
     if projet_id:
         query = query.filter_by(projet_id=projet_id)
     taches = query.order_by(Tache.date_limite.asc().nullslast()).all()
+    tags_dispos = tags_existants(taches)
+    tag_filtre = request.args.get('tag', '').strip()
+    if tag_filtre:
+        taches = [t for t in taches if tag_filtre.casefold() in {x.casefold() for x in t.liste_tags}]
 
     quadrants = {p: [] for p in PRIORITES_TACHE}
     for t in taches:
         quadrants.setdefault(t.priorite or 'a_planifier', []).append(t)
 
-    return render_template('matrice.html', projet=projet, quadrants=quadrants)
+    return render_template('matrice.html', projet=projet, quadrants=quadrants, tags_dispos=tags_dispos, tag_filtre=tag_filtre)
+
+# ── Estimation du temps des tâches ───────────────────────────────────────────
+
+@app.template_filter('duree')
+def duree_filter(valeur):
+    """2.5 -> '2 j 50 %', 0.25 -> '25 %', 3 -> '3 j', None -> '—'."""
+    if valeur is None:
+        return '—'
+    total_pct = round(valeur * 100)
+    jours, pct = divmod(total_pct, 100)
+    morceaux = ([f'{jours} j'] if jours else []) + ([f'{pct} %'] if pct else [])
+    return ' '.join(morceaux) or '0'
+
+def _parse_nombre_positif(texte):
+    """'' -> 0.0 ; '2,5' -> 2.5 ; lève ValueError si négatif, absurde ou non numérique."""
+    texte = (texte or '').strip().replace(',', '.')
+    if not texte:
+        return 0.0
+    valeur = float(texte)
+    if not 0 <= valeur <= 100000:
+        raise ValueError(texte)
+    return valeur
+
+def duree_depuis_champs(brut_jours, brut_pct):
+    """Convertit les champs 'jours' et '% de jour' en durée (float), ou None si les deux sont vides.
+    Lève ValueError si une valeur est invalide."""
+    if not (brut_jours or '').strip() and not (brut_pct or '').strip():
+        return None
+    return round(_parse_nombre_positif(brut_jours) + round(_parse_nombre_positif(brut_pct)) / 100, 4)
+
+@app.route('/projet/<int:projet_id>/taches/temps')
+@login_required
+def temps_projet(projet_id):
+    projet = Projet.query.get_or_404(projet_id)
+    return _vue_temps(projet_id=projet_id, projet=projet)
+
+@app.route('/taches/temps')
+@login_required
+def temps_global():
+    return _vue_temps()
+
+def _vue_temps(projet_id=None, projet=None):
+    avec_terminees = request.args.get('terminees') != '0'  # par défaut : toutes, terminées incluses
+    query = Tache.query.options(joinedload(Tache.projet))
+    if projet_id:
+        query = query.filter_by(projet_id=projet_id)
+    if not avec_terminees:
+        query = query.filter(Tache.statut.notin_(STATUTS_TACHE_CLOS))
+    taches = query.order_by(Tache.date_limite.asc().nullslast(), Tache.date_creation.desc()).all()
+    comptees = [t for t in taches if t.statut != 'abandonné']   # une tâche abandonnée ne compte pas dans les totaux
+    return render_template('temps.html', projet=projet, taches=taches, avec_terminees=avec_terminees,
+                           total=sum(t.duree_jours or 0 for t in comptees),
+                           nb_sans_estimation=sum(1 for t in comptees if t.duree_jours is None))
+
+@app.route('/taches/temps/enregistrer', methods=['POST'])
+@login_required
+def enregistrer_temps():
+    """Enregistre les estimations de toutes les tâches de la page (champs jours_<id> et pct_<id>)."""
+    ids = request.form.getlist('ids', type=int)
+    taches = {t.id: t for t in Tache.query.filter(Tache.id.in_(ids)).all()} if ids else {}
+    erreurs = []
+    for tache_id in ids:
+        tache = taches.get(tache_id)
+        if tache is None:
+            continue
+        try:
+            tache.duree_jours = duree_depuis_champs(request.form.get(f'jours_{tache_id}'), request.form.get(f'pct_{tache_id}'))
+        except ValueError:
+            erreurs.append(tache.description[:40])
+    db.session.commit()
+    if erreurs:
+        flash("Valeur invalide (ignorée) pour : " + ', '.join(erreurs), 'danger')
+    else:
+        flash('Estimations enregistrées.', 'success')
+    return retour_sur_place(url_for('temps_global'))
 
 @app.route('/projet/<int:projet_id>/ajouter_tache', methods=['POST'])
 @login_required
@@ -1028,7 +1315,8 @@ def ajouter_tache(projet_id):
         evenement_id = evenement.id
 
     tache = Tache(description=description, statut="à faire", date_limite=date_limite,
-                  priorite=priorite, projet_id=projet_id, evenement_id=evenement_id)
+                  priorite=priorite, projet_id=projet_id, evenement_id=evenement_id,
+                  tags=','.join(normaliser_tags(request.form.get('tags'))) or None)
     db.session.add(tache)
     db.session.commit()
     flash('Tâche ajoutée avec succès.', 'success')
@@ -1051,7 +1339,7 @@ def changer_statut(tache_id):
     nouveau_statut = request.form.get('statut')
     if nouveau_statut in STATUTS_TACHE:
         tache.statut = nouveau_statut
-        tache.date_cloture = datetime.utcnow() if nouveau_statut == 'terminé' else None
+        tache.date_cloture = datetime.utcnow() if nouveau_statut in STATUTS_TACHE_CLOS else None
         db.session.commit()
         flash('Statut de la tâche mis à jour.', 'success')
     else:
@@ -1092,9 +1380,14 @@ def editer_tache(tache_id):
         tache.statut = request.form['statut']
         priorite = request.form.get('priorite', 'a_planifier')
         tache.priorite = priorite if priorite in PRIORITES_TACHE else 'a_planifier'
-        if tache.statut == 'terminé' and not tache.date_cloture:
+        tache.tags = ','.join(normaliser_tags(request.form.get('tags'))) or None
+        try:
+            tache.duree_jours = duree_depuis_champs(request.form.get('jours'), request.form.get('pct'))
+        except ValueError:
+            flash('Durée invalide (ignorée) : saisissez des nombres positifs.', 'danger')
+        if tache.statut in STATUTS_TACHE_CLOS and not tache.date_cloture:
             tache.date_cloture = datetime.utcnow()
-        elif tache.statut != 'terminé':
+        elif tache.statut not in STATUTS_TACHE_CLOS:
             tache.date_cloture = None
         db.session.commit()
         flash('Tâche modifiée avec succès.', 'success')
@@ -1103,7 +1396,8 @@ def editer_tache(tache_id):
             return redirect(retour)
         return redirect(url_for('toutes_les_taches', projet_id=tache.projet_id))
     retour = request.args.get('retour', request.referrer or '')
-    return render_template('editer_tache.html', tache=tache, retour=retour)
+    return render_template('editer_tache.html', tache=tache, retour=retour,
+                           tags_suggestions=tags_existants(Tache.query.all()))
 
 # ── Scripts ──────────────────────────────────────────────────────────────────
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import badges_tags %}
 {% block title %}Tous les projets{% endblock %}
 
 {% block content %}
@@ -12,12 +13,23 @@
     <div>
         <label class="bal-label">Statut</label>
         <div class="d-flex gap-2 flex-wrap">
-            <a href="{{ url_for('tous_les_projets', statut='tous') }}" class="btn-bal-{{ 'outline' if statut_filtre == 'tous' else 'ghost' }}">Tous</a>
+            <a href="{{ url_for('tous_les_projets', statut='tous', tag=tag_filtre or none) }}" class="btn-bal-{{ 'outline' if statut_filtre == 'tous' else 'ghost' }}">Tous</a>
             {% for s in STATUTS_PROJET %}
-            <a href="{{ url_for('tous_les_projets', statut=s) }}" class="btn-bal-{{ 'outline' if statut_filtre == s else 'ghost' }}">{{ s|capitalize }}</a>
+            <a href="{{ url_for('tous_les_projets', statut=s, tag=tag_filtre or none) }}" class="btn-bal-{{ 'outline' if statut_filtre == s else 'ghost' }}">{{ s|capitalize }}</a>
             {% endfor %}
         </div>
     </div>
+    {% if tags_dispos or tag_filtre %}
+    <div>
+        <label class="bal-label">Tag</label>
+        <div class="d-flex gap-1 flex-wrap align-items-center">
+            <a href="{{ url_for('tous_les_projets', statut=statut_filtre) }}" class="btn-bal-{{ 'outline' if not tag_filtre else 'ghost' }}">Tous</a>
+            {% for tag, nb in tags_dispos %}
+            <a href="{{ url_for('tous_les_projets', statut=statut_filtre, tag=tag) }}" class="tag-projet {{ 'actif' if tag_filtre|lower == tag|lower }}"><i class="bi bi-tag me-1"></i>{{ tag }} ({{ nb }})</a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 {% if projets %}
@@ -33,6 +45,7 @@
                 {% if projet.description %}
                 <div class="text-muted small">{{ projet.description|truncate(120) }}</div>
                 {% endif %}
+                {% if projet.liste_tags %}<div class="my-1">{{ badges_tags(projet) }}</div>{% endif %}
                 <small class="text-muted">
                     Créé le {{ projet.date_creation.strftime('%d/%m/%Y') if projet.date_creation else '—' }}
                     · {{ projet.nb_evenements_a_venir }} événement{% if projet.nb_evenements_a_venir != 1 %}s{% endif %} à venir
@@ -47,21 +60,21 @@
     {% if pagination.pages > 1 %}
     <div class="bal-pagination">
         {% if pagination.has_prev %}
-        <a href="{{ url_for('tous_les_projets', page=pagination.prev_num, statut=statut_filtre) }}"><i class="bi bi-chevron-left"></i></a>
+        <a href="{{ url_for('tous_les_projets', page=pagination.prev_num, statut=statut_filtre, tag=tag_filtre or none) }}"><i class="bi bi-chevron-left"></i></a>
         {% endif %}
         {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
             {% if p %}
                 {% if p == pagination.page %}
                 <span class="current">{{ p }}</span>
                 {% else %}
-                <a href="{{ url_for('tous_les_projets', page=p, statut=statut_filtre) }}">{{ p }}</a>
+                <a href="{{ url_for('tous_les_projets', page=p, statut=statut_filtre, tag=tag_filtre or none) }}">{{ p }}</a>
                 {% endif %}
             {% else %}
             <span>…</span>
             {% endif %}
         {% endfor %}
         {% if pagination.has_next %}
-        <a href="{{ url_for('tous_les_projets', page=pagination.next_num, statut=statut_filtre) }}"><i class="bi bi-chevron-right"></i></a>
+        <a href="{{ url_for('tous_les_projets', page=pagination.next_num, statut=statut_filtre, tag=tag_filtre or none) }}"><i class="bi bi-chevron-right"></i></a>
         {% endif %}
     </div>
     {% endif %}

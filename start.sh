@@ -11,6 +11,9 @@ fi
 
 source venv/bin/activate
 
+# Met la base à jour si besoin (idempotent, sans effet si déjà fait)
+python migrer_base.py || exit 1
+
 # Port par défaut : 8000. Modifiable en passant un argument : ./start.sh 8001
 PORT="${1:-8000}"
 

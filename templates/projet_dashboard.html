@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import boutons_ouvrir, bouton_mail, badge_duree, barre, badges_tags, badges_tags_tache %}
 {% block title %}{{ projet.nom }}{% endblock %}
 
 {% block content %}
@@ -16,6 +17,7 @@
             <span class="statut-badge {{ statut_class.get(projet.statut or 'en cours', 'statut-en-cours') }}">{{ projet.statut or 'en cours' }}</span>
         </div>
         {% if projet.description %}<div class="subtitle">{{ projet.description }}</div>{% endif %}
+        {% if projet.liste_tags %}<div class="mt-1">{{ badges_tags(projet, true) }}</div>{% endif %}
     </div>
     <a href="{{ url_for('editer_projet', projet_id=projet.id) }}" class="btn-bal-ghost"><i class="bi bi-pencil"></i> Éditer</a>
 </div>
@@ -34,7 +36,7 @@
 
     <div class="d-flex flex-wrap gap-2 mt-3">
         {% if projet.chemin_rproj %}
-        <div class="p-2 px-3 rounded d-flex align-items-center gap-2" style="border:1px solid var(--bal-border);">
+        <div class="p-2 px-3 rounded d-flex align-items-center gap-2 puce-info info-local" style="border:1px solid var(--bal-border);">
             <i class="bi bi-file-earmark-code text-muted"></i>
             <div>
                 <div class="small fw-semibold">Fichier main</div>
@@ -48,11 +50,8 @@
         {% endif %}
 
         {% for lien in projet.liens if lien.est_epingle %}
-        <div class="p-2 px-3 rounded d-flex align-items-center gap-2" style="border:1px solid var(--bal-border);" title="{{ lien.commentaire or '' }}">
-            {% if lien.type == 'web' %}<i class="bi bi-link-45deg text-muted"></i>
-            {% elif lien.type == 'dossier' %}<i class="bi bi-folder2 text-muted"></i>
-            {% elif lien.type == 'upload' %}<i class="bi bi-file-earmark-arrow-up text-muted"></i>
-            {% else %}<i class="bi bi-file-earmark text-muted"></i>{% endif %}
+        <div class="p-2 px-3 rounded d-flex align-items-center gap-2 puce-info info-{{ CATEGORIE_LIEN.get(lien.type, 'local') }}" style="border:1px solid var(--bal-border);" title="{{ TYPES_LIEN_LABELS.get(lien.type, lien.type) }}{% if lien.commentaire %} — {{ lien.commentaire }}{% endif %}">
+            <i class="bi {{ ICONES_LIEN.get(lien.type, 'bi-file-earmark') }}"></i>
             <div>
                 <div class="small fw-semibold">{{ lien.intitule }}</div>
                 {% if lien.commentaire %}<div class="text-muted" style="font-size:0.78rem;">{{ lien.commentaire|truncate(40) }}</div>{% endif %}
@@ -61,9 +60,10 @@
                 {% if lien.type == 'web' %}
                 <a href="{{ lien.valeur }}" target="_blank" class="btn-bal-ghost" style="padding:0.2rem 0.5rem;" title="Ouvrir"><i class="bi bi-box-arrow-up-right"></i></a>
                 {% elif lien.type == 'upload' %}
-                <a href="{{ url_for('servir_lien_upload', lien_id=lien.id) }}" target="_blank" class="btn-bal-ghost" style="padding:0.2rem 0.5rem;" title="Ouvrir"><i class="bi bi-box-arrow-up-right"></i></a>
+                <a href="{{ url_for('servir_fichier', fichier_id=lien.id) }}" target="_blank" class="btn-bal-ghost" style="padding:0.2rem 0.5rem;" title="Voir le fichier"><i class="bi bi-eye"></i></a>
                 {% else %}
-                <span class="text-muted small" style="font-size:0.72rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;" title="{{ lien.valeur }}">{{ lien.valeur }}</span>
+                {{ boutons_ouvrir(lien, request.path) }}
+                {{ bouton_mail(lien) }}
                 {% endif %}
                 <form method="POST" action="{{ url_for('basculer_epingle', lien_id=lien.id) }}" style="display:inline;">
                     <input type="hidden" name="retour" value="{{ request.path }}">
@@ -94,17 +94,14 @@
                     </div>
                     <div class="col-md-3">
                         <label class="bal-label">Intitulé *</label>
-                        <input type="text" class="bal-form-control" name="intitule" placeholder="Ex : lien GitHub" required>
+                        <input type="text" class="bal-form-control" name="intitule" id="champ-intitule" required>
                     </div>
-                    <div class="col-md-6" id="champ-valeur">
-                        <label class="bal-label">URL ou chemin *</label>
-                        <input type="text" class="bal-form-control" name="valeur" placeholder="https:// ou /chemin/vers/...">
-                    </div>
+                    <div class="col-md-6" id="champ-valeur"></div>
                 </div>
                 <div class="row g-2 mt-2">
                     <div class="col-12">
-                        <label class="bal-label">Commentaire</label>
-                        <input type="text" class="bal-form-control" name="commentaire" placeholder="Ex : données brutes">
+                        <label class="bal-label" id="label-commentaire">Commentaire</label>
+                        <input type="text" class="bal-form-control" name="commentaire" id="champ-commentaire">
                     </div>
                 </div>
                 <div class="mt-2 d-flex justify-content-end">
@@ -116,21 +113,62 @@
 </div>
 
 <script>
+// Textes d'exemple du formulaire « Ajouter une info », selon le type choisi
+const CONFIG_TYPES = {
+    dossier:       {intitule: 'Ex : données brutes', valeur: {label: 'Chemin', type: 'text',  placeholder: '/chemin/vers/...'}, commentaire: {label: 'Commentaire', placeholder: 'Description'}},
+    fichier_local: {intitule: 'Ex : rapport',        valeur: {label: 'Chemin', type: 'text',  placeholder: '/chemin/vers/...'}, commentaire: {label: 'Commentaire', placeholder: 'Description'}},
+    upload:        {intitule: "Ex : rapport d'analyse", valeur: {label: 'Fichier (max 16 Mo)', type: 'file', note: 'Formats : txt, pdf, html, images, doc(x), xls(x), csv, r, rdata, rds. Si trop volumineux, préférez un lien.'}, commentaire: {label: 'Commentaire', placeholder: 'Description'}},
+    web:           {intitule: 'Ex : lien Github',    valeur: {label: 'URL',    type: 'text',  placeholder: 'https://...'},     commentaire: {label: 'Commentaire', placeholder: 'Description'}},
+    personne:      {intitule: 'Nom et prénom',       valeur: {label: 'Email',  type: 'email', placeholder: 'prenom.nom@exemple.fr'}, commentaire: {label: 'Rôle', placeholder: 'Ex : biostatisticienne'}},
+};
+
 function majChampValeur() {
     const type = document.getElementById('type-lien').value;
-    const champ = document.getElementById('champ-valeur');
-    if (type === 'upload') {
-        champ.innerHTML = `
-            <label class="bal-label">Fichier (max 16 Mo) *</label>
-            <input type="file" class="bal-form-control" name="fichier">
-            <small class="text-muted">Formats : txt, pdf, html, images, doc(x), xls(x), csv, r, rdata, rds. Si trop volumineux, préférez un lien.</small>`;
-    } else if (type === 'web') {
-        champ.innerHTML = `<label class="bal-label">URL *</label><input type="text" class="bal-form-control" name="valeur" placeholder="https://...">`;
-    } else {
-        champ.innerHTML = `<label class="bal-label">Chemin *</label><input type="text" class="bal-form-control" name="valeur" placeholder="/chemin/vers/...">`;
-    }
+    const cfg = CONFIG_TYPES[type] || CONFIG_TYPES.dossier;
+    document.getElementById('champ-intitule').placeholder = cfg.intitule;
+    document.getElementById('label-commentaire').textContent = cfg.commentaire.label;
+    document.getElementById('champ-commentaire').placeholder = cfg.commentaire.placeholder;
+    const v = cfg.valeur;
+    document.getElementById('champ-valeur').innerHTML = v.type === 'file'
+        ? `<label class="bal-label">${v.label} *</label><input type="file" class="bal-form-control" name="fichier" required><small class="text-muted">${v.note}</small>`
+        : `<label class="bal-label">${v.label} *</label><input type="${v.type}" class="bal-form-control" name="valeur" placeholder="${v.placeholder}" required>`;
 }
+majChampValeur();
 </script>
+
+<!-- Avancement -->
+{% if avancement.nb_total %}
+{% set a = avancement %}
+{% set temps_total = a.temps_total %}
+<div class="bal-card mb-3">
+    <div class="bal-card-header"><i class="bi bi-bar-chart-line me-1"></i>Avancement</div>
+
+    <div class="mb-3">
+        <div class="d-flex justify-content-between small mb-1">
+            <span><strong>Tâches</strong> · {{ a.nb_terminees }} réalisée{% if a.nb_terminees != 1 %}s{% endif %} / {{ a.nb_restantes }} restante{% if a.nb_restantes != 1 %}s{% endif %}</span>
+            <span class="text-muted">{{ ((a.nb_terminees / a.nb_total * 100) | round | int) }} %</span>
+        </div>
+        {{ barre(a.nb_terminees, a.nb_total) }}
+    </div>
+
+    <div>
+        <div class="d-flex justify-content-between small mb-1">
+            {% if temps_total %}
+            <span><strong>Temps</strong> · {{ a.temps_fait|duree }} passé / {{ a.temps_restant|duree }} restant <span class="text-muted">(sur {{ temps_total|duree }} estimés)</span></span>
+            <span class="text-muted">{{ ((a.temps_fait / temps_total * 100) | round | int) }} %</span>
+            {% else %}
+            <span><strong>Temps</strong> · <span class="text-muted">aucune durée estimée</span></span>
+            {% endif %}
+        </div>
+        {{ barre(a.temps_fait, temps_total) }}
+        <div class="small text-muted mt-1">
+            Le temps passé = durées estimées des tâches terminées.{% if a.nb_abandonnees %} {{ a.nb_abandonnees }} tâche{% if a.nb_abandonnees != 1 %}s abandonnées non comptées{% else %} abandonnée non comptée{% endif %}.{% endif %}
+            {% if a.nb_sans_estimation %}{{ a.nb_sans_estimation }} tâche{% if a.nb_sans_estimation != 1 %}s{% endif %} sans estimation non comptée{% if a.nb_sans_estimation != 1 %}s{% endif %} —{% endif %}
+            <a href="{{ url_for('temps_projet', projet_id=projet.id) }}">estimer le temps</a>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <!-- Suivi -->
 <div class="row g-3">
@@ -140,6 +178,7 @@ function majChampValeur() {
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <div class="bal-card-header mb-0"><i class="bi bi-check2-square me-1"></i>Tâches en cours</div>
                 <div class="d-flex gap-2">
+                    <a href="{{ url_for('temps_projet', projet_id=projet.id) }}" class="btn-bal-ghost" style="font-size:0.8rem;" title="Estimer le temps"><i class="bi bi-stopwatch"></i></a>
                     <a href="{{ url_for('matrice_projet', projet_id=projet.id) }}" class="btn-bal-ghost" style="font-size:0.8rem;"><i class="bi bi-grid-3x3-gap"></i></a>
                     <a href="{{ url_for('toutes_les_taches', projet_id=projet.id) }}" class="btn-bal-ghost" style="font-size:0.8rem;">Toutes →</a>
                 </div>
@@ -160,6 +199,8 @@ function majChampValeur() {
                     <div>
                         {{ tache.description }}
                         <span class="priorite-badge priorite-{{ tache.priorite or 'a_planifier' }}" style="font-size:0.7rem;">{{ PRIORITES_LABELS.get(tache.priorite, 'À planifier') }}</span>
+                        {{ badge_duree(tache) }}
+                        {{ badges_tags_tache(tache) }}
                         {% if tache.date_limite %}
                         <small class="text-muted ms-1">· {{ tache.date_limite.strftime('%d/%m') }}</small>
                         {% endif %}
@@ -174,11 +215,13 @@ function majChampValeur() {
                             {% if tache.statut == 'en cours' %}s-en-cours
                             {% elif tache.statut == 'en attente' %}s-attente
                             {% elif tache.statut == 'terminé' %}s-termine
+                            {% elif tache.statut == 'abandonné' %}s-abandonne
                             {% else %}s-a-faire{% endif %}" onchange="this.form.submit()">
                             <option value="à faire" {% if tache.statut == 'à faire' %}selected{% endif %}>À faire</option>
                             <option value="en cours" {% if tache.statut == 'en cours' %}selected{% endif %}>En cours</option>
                             <option value="en attente" {% if tache.statut == 'en attente' %}selected{% endif %}>En attente</option>
                             <option value="terminé" {% if tache.statut == 'terminé' %}selected{% endif %}>Terminé</option>
+                            <option value="abandonné" {% if tache.statut == 'abandonné' %}selected{% endif %}>Abandonné</option>
                         </select>
                     </form>
                 </div>

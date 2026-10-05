@@ -1,0 +1,25 @@
+{# Bouton « Vérifier » des infos. Variable attendue : infos (liste des infos affichées) #}
+<script>
+const idsLiens = [{% for lien in infos %}{{ lien.id }}{% if not loop.last %},{% endif %}{% endfor %}];
+
+function verifierLien(id) {
+    const cell = document.getElementById('etat-' + id);
+    cell.innerHTML = '<span style="color:var(--bal-muted);">…</span>';
+    fetch('/lien/' + id + '/verifier', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                cell.innerHTML = '<span style="color:#2d6a3f;" title="' + data.message + '"><i class="bi bi-check-circle-fill"></i></span>';
+            } else {
+                cell.innerHTML = '<span style="color:var(--bal-danger);" title="' + data.message + '"><i class="bi bi-x-circle-fill"></i></span>';
+            }
+        })
+        .catch(() => {
+            cell.innerHTML = '<span style="color:var(--bal-warning);"><i class="bi bi-exclamation-circle"></i></span>';
+        });
+}
+
+function verifierTous() {
+    idsLiens.forEach(id => verifierLien(id));
+}
+</script>

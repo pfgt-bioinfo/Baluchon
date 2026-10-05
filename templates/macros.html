@@ -9,3 +9,109 @@
     } %}
     <span class="{{ type_colors.get(type, 'badge bg-secondary') }}">{{ type }}</span>
 {% endmacro %}
+{# Icônes pour ouvrir en local le dossier / le fichier d'une info (POST, évite de lancer une ouverture par simple GET) #}
+{% macro boutons_ouvrir(lien, retour, style='padding:0.2rem 0.5rem;') %}
+{% if lien.type in ('dossier', 'fichier_local') and lien.valeur %}
+<form method="POST" action="{{ url_for('ouvrir_lien', lien_id=lien.id) }}" style="display:inline;">
+    <input type="hidden" name="retour" value="{{ retour }}">
+    <input type="hidden" name="cible" value="chemin">
+    <button type="submit" class="btn-bal-ghost" style="{{ style }}" title="Ouvrir {{ lien.valeur }}">
+        <i class="bi {{ 'bi-folder2-open' if lien.type == 'dossier' else 'bi-box-arrow-up-right' }}"></i>
+    </button>
+</form>
+{% if lien.type == 'fichier_local' %}
+<form method="POST" action="{{ url_for('ouvrir_lien', lien_id=lien.id) }}" style="display:inline;">
+    <input type="hidden" name="retour" value="{{ retour }}">
+    <input type="hidden" name="cible" value="dossier">
+    <button type="submit" class="btn-bal-ghost" style="{{ style }}" title="Ouvrir le dossier contenant le fichier">
+        <i class="bi bi-folder2-open"></i>
+    </button>
+</form>
+{% endif %}
+{% endif %}
+{% endmacro %}
+
+{# Icône mailto pour une info de type Personne #}
+{% macro bouton_mail(lien, style='padding:0.2rem 0.5rem;') %}
+{% if lien.type == 'personne' and lien.valeur %}
+<a href="mailto:{{ lien.valeur }}" class="btn-bal-ghost" style="{{ style }}" title="Écrire à {{ lien.valeur }}"><i class="bi bi-envelope"></i></a>
+{% endif %}
+{% endmacro %}
+
+{# Badge de durée estimée d'une tâche (rien si non estimée) #}
+{% macro badge_duree(tache) %}
+{% if tache.duree_jours is not none %}
+<span class="priorite-badge" style="background:#e8eef5;color:#34495e;" title="Durée estimée"><i class="bi bi-stopwatch"></i>{{ tache.duree_jours|duree }}</span>
+{% endif %}
+{% endmacro %}
+
+{# Barre de progression fait/total #}
+{% macro barre(fait, total, hauteur='10px') %}
+{% set pct = ((fait / total * 100) | round | int) if total else 0 %}
+<div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ pct }}"
+     style="height:{{ hauteur }};background:var(--bal-accent-light);border-radius:6px;overflow:hidden;">
+    <div style="width:{{ pct }}%;height:100%;background:var(--bal-accent);"></div>
+</div>
+{% endmacro %}
+
+{# Pastille colorée du type d'une info (local = vert, uploadé = bleu, web = orange, personne = violet).
+   `type` peut aussi valoir 'main' (fichier main du projet). #}
+{% macro pastille_type(type, avec_libelle=True) %}
+<span class="pastille-info info-{{ CATEGORIE_LIEN.get(type, 'local') }}" title="{{ TYPES_LIEN_LABELS.get(type, type) }}">
+    <i class="bi {{ ICONES_LIEN.get(type, 'bi-file-earmark') }}"></i>{% if avec_libelle %}{{ TYPES_LIEN_LABELS.get(type, type) }}{% endif %}
+</span>
+{% endmacro %}
+
+{# Boutons œil + télécharger d'un fichier uploadé #}
+{% macro boutons_upload(lien, style='padding:0.2rem 0.5rem;') %}
+{% if lien.type == 'upload' %}
+<a href="{{ url_for('servir_fichier', fichier_id=lien.id) }}" target="_blank" class="btn-bal-ghost" style="{{ style }}" title="Voir le fichier"><i class="bi bi-eye"></i></a>
+<a href="{{ url_for('servir_fichier', fichier_id=lien.id, action='telecharger') }}" class="btn-bal-ghost" style="{{ style }}" title="Télécharger"><i class="bi bi-download"></i></a>
+{% endif %}
+{% endmacro %}
+
+{# Légende des couleurs #}
+{% macro legende_couleurs() %}
+<div class="d-flex flex-wrap gap-3 small text-muted mb-3">
+    <span><span class="info-local"><span class="point-info"></span></span>Local (dossier, fichier)</span>
+    <span><span class="info-upload"><span class="point-info"></span></span>Fichier uploadé</span>
+    <span><span class="info-web"><span class="point-info"></span></span>Lien web</span>
+    <span><span class="info-personne"><span class="point-info"></span></span>Personne</span>
+</div>
+{% endmacro %}
+
+{# Tags d'un projet. cliquable=True : chaque tag mène à la liste des projets portant ce tag. #}
+{% macro badges_tags(projet, cliquable=False) %}
+{% for t in projet.liste_tags %}{% if cliquable %}<a class="tag-projet" href="{{ url_for('tous_les_projets', statut='tous', tag=t) }}" title="Voir les projets « {{ t }} »"><i class="bi bi-tag me-1"></i>{{ t }}</a>{% else %}<span class="tag-projet">{{ t }}</span>{% endif %} {% endfor %}
+{% endmacro %}
+
+{# Champ « Tags » des formulaires projet : texte séparé par des virgules + suggestions cliquables #}
+{% macro champ_tags(valeur, suggestions) %}
+<div class="bal-form-group">
+    <label class="bal-label" for="tags">Tags <span class="text-muted">(optionnel, séparés par des virgules)</span></label>
+    <input type="text" class="bal-form-control" id="tags" name="tags" value="{{ valeur or '' }}" placeholder="Ex : single cell, RNA-seq" maxlength="600" autocomplete="off">
+    {% if suggestions %}
+    <div class="mt-2 d-flex flex-wrap gap-1 align-items-center">
+        <small class="text-muted me-1">Déjà utilisés :</small>
+        {% for tag, nb in suggestions %}
+        <button type="button" class="tag-projet border-0 suggestion-tag" data-tag="{{ tag }}" title="Ajouter ce tag">{{ tag }}</button>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+<script>
+// Un clic sur un tag déjà utilisé l'ajoute au champ (sans doublon)
+document.querySelectorAll('.suggestion-tag').forEach(b => b.addEventListener('click', () => {
+    const champ = document.getElementById('tags');
+    const tags = champ.value.split(',').map(t => t.trim()).filter(t => t);
+    if (!tags.some(t => t.toLowerCase() === b.dataset.tag.toLowerCase())) tags.push(b.dataset.tag);
+    champ.value = tags.join(', ');
+    champ.focus();
+}));
+</script>
+{% endmacro %}
+
+{# Tags d'une tâche : chaque tag mène à la liste globale des tâches portant ce tag #}
+{% macro badges_tags_tache(tache) %}
+{% for t in tache.liste_tags %}<a class="tag-projet" href="{{ url_for('vue_globale_taches', tag=t) }}" title="Voir les tâches « {{ t }} »"><i class="bi bi-tag me-1"></i>{{ t }}</a> {% endfor %}
+{% endmacro %}

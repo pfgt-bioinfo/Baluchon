@@ -32,12 +32,12 @@
         </div>
         {% else %}
         <div class="bal-form-group">
-            <label class="bal-label">{% if lien.type == 'web' %}URL{% else %}Chemin{% endif %}</label>
+            <label class="bal-label">{% if lien.type == 'web' %}URL{% elif lien.type == 'personne' %}Email{% else %}Chemin{% endif %}</label>
             <input type="text" class="bal-form-control" name="valeur" value="{{ lien.valeur }}">
         </div>
         {% endif %}
         <div class="bal-form-group">
-            <label class="bal-label">Commentaire</label>
+            <label class="bal-label">{% if lien.type == 'personne' %}Rôle{% else %}Commentaire{% endif %}</label>
             <input type="text" class="bal-form-control" name="commentaire" value="{{ lien.commentaire or '' }}">
         </div>
         <div class="d-flex gap-2 mt-3">

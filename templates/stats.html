@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import barre %}
 {% block title %}Statistiques{% endblock %}
 
 {% block content %}
@@ -115,9 +116,78 @@
     {% endif %}
 </div>
 
+<!-- Avancement des projets -->
+{% macro ligne_avancement(a) %}
+<div class="row g-3">
+    <div class="col-md-6">
+        <div class="d-flex justify-content-between small mb-1">
+            <span>Tâches · {{ a.nb_terminees }} réalisée{% if a.nb_terminees != 1 %}s{% endif %} / {{ a.nb_restantes }} restante{% if a.nb_restantes != 1 %}s{% endif %}</span>
+            <span class="text-muted">{{ ((a.nb_terminees / a.nb_total * 100) | round | int) if a.nb_total else 0 }} %</span>
+        </div>
+        {{ barre(a.nb_terminees, a.nb_total, '8px') }}
+    </div>
+    <div class="col-md-6">
+        <div class="d-flex justify-content-between small mb-1">
+            {% if a.temps_total %}
+            <span>Temps · {{ a.temps_fait|duree }} passé / {{ a.temps_restant|duree }} restant</span>
+            <span class="text-muted">{{ ((a.temps_fait / a.temps_total * 100) | round | int) }} %</span>
+            {% else %}
+            <span class="text-muted">Temps · aucune durée estimée</span>
+            {% endif %}
+        </div>
+        {{ barre(a.temps_fait, a.temps_total, '8px') }}
+    </div>
+</div>
+{% endmacro %}
+
+<div class="bal-card mb-4">
+    <div class="bal-card-header"><i class="bi bi-bar-chart-line me-1"></i>Avancement des projets</div>
+    <div class="small text-muted mb-3">État actuel des tâches des projets de la période. Temps passé = durées estimées des tâches terminées ; les tâches sans estimation ne comptent pas dans le temps.</div>
+    {% if bilan_projets %}
+    <div class="pb-3 mb-3" style="border-bottom:2px solid var(--bal-border);">
+        <div class="mb-2" style="font-size:0.85rem;font-weight:600;">Tous les projets de la période</div>
+        {{ ligne_avancement(avancement_global) }}
+    </div>
+    {% for item in bilan_projets %}
+    <div class="mb-3">
+        <div class="mb-1" style="font-size:0.85rem;font-weight:500;">
+            <a href="{{ url_for('projet_dashboard', projet_id=item.projet.id) }}" style="text-decoration:none;color:inherit;">{{ item.projet.nom }}</a>
+            {% if item.avancement.nb_sans_estimation %}<small class="text-muted ms-2">{{ item.avancement.nb_sans_estimation }} tâche{% if item.avancement.nb_sans_estimation != 1 %}s{% endif %} sans estimation</small>{% endif %}
+        </div>
+        {% if item.avancement.nb_total %}
+        {{ ligne_avancement(item.avancement) }}
+        {% else %}
+        <div class="small text-muted">Aucune tâche.</div>
+        {% endif %}
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="bal-empty">
+        <i class="bi bi-bar-chart-line"></i>
+        Aucun projet actif sur cette période.
+    </div>
+    {% endif %}
+</div>
+
 <!-- Tableau récapitulatif -->
 <div class="bal-card">
-    <div class="bal-card-header"><i class="bi bi-list-check me-1"></i>Projets sur la période</div>
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="bal-card-header mb-0"><i class="bi bi-list-check me-1"></i>Projets sur la période</div>
+        <div class="d-flex gap-2 align-items-center">
+        <a id="export-csv" href="{{ url_for('stats_export', date_debut=date_debut, date_fin=date_fin) }}" data-base="{{ url_for('stats_export', date_debut=date_debut, date_fin=date_fin) }}" class="btn-bal-ghost" style="font-size:0.8rem;" title="Télécharger le tableau (colonnes affichées) au format CSV, lisible dans Excel / LibreOffice"><i class="bi bi-download me-1"></i>Exporter CSV</a>
+        <details style="position:relative;">
+            <summary class="btn-bal-ghost" style="cursor:pointer;list-style:none;font-size:0.8rem;"><i class="bi bi-layout-three-columns me-1"></i>Colonnes</summary>
+            <div class="bal-card" style="position:absolute;right:0;z-index:10;min-width:230px;margin-top:0.3rem;box-shadow:0 4px 14px rgba(0,0,0,.12);">
+                {% for cle, libelle, defaut in colonnes %}
+                <label class="d-flex align-items-center gap-2 small mb-1" style="cursor:pointer;">
+                    <input type="checkbox" class="choix-colonne" value="{{ cle }}" {% if defaut %}checked{% endif %}> {{ libelle }}
+                </label>
+                {% endfor %}
+                <button type="button" class="btn-bal-ghost mt-2" style="font-size:0.75rem;" id="colonnes-defaut">Rétablir par défaut</button>
+            </div>
+        </details>
+        </div>
+    </div>
     {% if bilan_projets %}
     {% set etat_couleur = {
         'Nouveau': 'statut-en-cours',
@@ -125,40 +195,55 @@
         'Terminé': 'statut-archive',
         'Abandonné': 'statut-abandonne'
     } %}
-    <table style="width:100%;border-collapse:collapse;">
+    {% set cache = 'display:none;' %}
+    <div style="overflow-x:auto;">
+    <table id="tableau-bilan" style="width:100%;border-collapse:collapse;">
         <thead>
             <tr style="font-size:0.78rem;color:var(--bal-muted);text-transform:uppercase;letter-spacing:.03em;">
                 <th style="text-align:left;padding:0.4rem 0.5rem;">Projet</th>
-                <th style="text-align:left;padding:0.4rem 0.5rem;">État</th>
-                <th style="text-align:left;padding:0.4rem 0.5rem;">Période d'activité</th>
-                <th style="text-align:right;padding:0.4rem 0.5rem;">Durée</th>
-                <th style="text-align:right;padding:0.4rem 0.5rem;">Évt</th>
-                <th style="text-align:right;padding:0.4rem 0.5rem;">Tâches</th>
-                <th style="text-align:right;padding:0.4rem 0.5rem;">Total</th>
+                {% for cle, libelle, defaut in colonnes %}
+                <th data-col="{{ cle }}" style="text-align:{{ 'left' if cle in ('etat', 'periode', 'tags') else 'right' }};padding:0.4rem 0.5rem;{% if not defaut %}{{ cache }}{% endif %}">{{ {'taches': 'Tâches', 'total': 'Total', 'duree': 'Durée', 'temps_fait': 'Temps passé', 'temps_restant': 'Temps restant', 'temps_total': 'Temps estimé total'}.get(cle, libelle) }}</th>
+                {% endfor %}
             </tr>
         </thead>
         <tbody>
         {% for item in bilan_projets %}
+        {% set av = item.avancement %}
         <tr style="border-top:1px solid var(--bal-border);">
             <td style="padding:0.5rem 0.5rem;">
                 <a href="{{ url_for('projet_dashboard', projet_id=item.projet.id) }}" style="text-decoration:none;color:inherit;font-size:0.85rem;font-weight:500;">
                     {{ item.projet.nom }}
                 </a>
             </td>
-            <td style="padding:0.5rem 0.5rem;">
+            <td data-col="etat" style="padding:0.5rem 0.5rem;">
                 <span class="statut-badge {{ etat_couleur.get(item.etat_periode, 'statut-en-cours') }}">{{ item.etat_periode }}</span>
             </td>
-            <td style="padding:0.5rem 0.5rem;font-size:0.82rem;color:var(--bal-muted);">
+            <td data-col="periode" style="padding:0.5rem 0.5rem;font-size:0.82rem;color:var(--bal-muted);">
                 {{ item.debut_reel.strftime('%d/%m/%Y') }} → {{ item.fin_reel.strftime('%d/%m/%Y') }}
             </td>
-            <td style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;color:var(--bal-muted);">{{ item.duree_jours }} j</td>
-            <td style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;color:var(--bal-muted);">{{ item.nb_evenements }}</td>
-            <td style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;color:var(--bal-muted);">{{ item.nb_taches }}</td>
-            <td style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;font-weight:600;">{{ item.nb_activite }}</td>
+            <td data-col="duree" style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;color:var(--bal-muted);">{{ item.duree_jours }} j</td>
+            <td data-col="evt" style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;color:var(--bal-muted);">{{ item.nb_evenements }}</td>
+            <td data-col="taches" style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;color:var(--bal-muted);">{{ item.nb_taches }}</td>
+            <td data-col="total" style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;font-weight:600;">{{ item.nb_activite }}</td>
+            <td data-col="pct_taches" style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;white-space:nowrap;"
+                {% if av.nb_total %}title="{{ av.nb_terminees }} réalisée(s) / {{ av.nb_restantes }} restante(s)"{% endif %}>
+                {% if av.nb_total %}{{ (av.nb_terminees / av.nb_total * 100) | round | int }} %{% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            <td data-col="pct_temps" style="text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;white-space:nowrap;"
+                {% if av.temps_total %}title="{{ av.temps_fait|duree }} passé / {{ av.temps_restant|duree }} restant"{% endif %}>
+                {% if av.temps_total %}{{ (av.temps_fait / av.temps_total * 100) | round | int }} %{% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            <td data-col="nb_faites" style="{{ cache }}text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;">{{ av.nb_terminees }}</td>
+            <td data-col="nb_restantes" style="{{ cache }}text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;">{{ av.nb_restantes }}</td>
+            <td data-col="temps_fait" style="{{ cache }}text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;white-space:nowrap;">{{ av.temps_fait|duree if av.temps_total else '—' }}</td>
+            <td data-col="temps_restant" style="{{ cache }}text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;white-space:nowrap;">{{ av.temps_restant|duree if av.temps_total else '—' }}</td>
+            <td data-col="temps_total" style="{{ cache }}text-align:right;padding:0.5rem 0.5rem;font-size:0.85rem;white-space:nowrap;">{{ av.temps_total|duree if av.temps_total else '—' }}</td>
+            <td data-col="tags" style="{{ cache }}padding:0.5rem 0.5rem;font-size:0.85rem;">{% for t in item.projet.liste_tags %}<span class="tag-projet">{{ t }}</span> {% else %}<span class="text-muted">—</span>{% endfor %}</td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
+    </div>
     {% else %}
     <div class="bal-empty">
         <i class="bi bi-list-check"></i>
@@ -166,4 +251,39 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+// Colonnes du tableau : le choix est mémorisé dans ce navigateur (localStorage), sans toucher à la base.
+(function () {
+    const CLE = 'baluchon_stats_colonnes';
+    const cases = Array.from(document.querySelectorAll('.choix-colonne'));
+    if (!cases.length) return;
+    const defaut = cases.map(c => ({cle: c.value, coche: c.defaultChecked}));
+
+    function lire() {
+        try { const v = JSON.parse(localStorage.getItem(CLE)); return Array.isArray(v) ? v : null; } catch (e) { return null; }
+    }
+    function ecrire(visibles) {
+        try { localStorage.setItem(CLE, JSON.stringify(visibles)); } catch (e) {}
+    }
+    function appliquer(visibles) {
+        const lienExport = document.getElementById('export-csv');   // l'export suit les colonnes cochées
+        if (lienExport) lienExport.href = lienExport.dataset.base + '&cols=' + encodeURIComponent(visibles.join(','));
+        cases.forEach(c => { c.checked = visibles.includes(c.value); });
+        document.querySelectorAll('#tableau-bilan [data-col]').forEach(el => {
+            el.style.display = visibles.includes(el.dataset.col) ? '' : 'none';
+        });
+    }
+    const memorise = lire();
+    appliquer(memorise || defaut.filter(d => d.coche).map(d => d.cle));
+    cases.forEach(c => c.addEventListener('change', () => {
+        const visibles = cases.filter(x => x.checked).map(x => x.value);
+        ecrire(visibles); appliquer(visibles);
+    }));
+    document.getElementById('colonnes-defaut').addEventListener('click', () => {
+        try { localStorage.removeItem(CLE); } catch (e) {}
+        appliquer(defaut.filter(d => d.coche).map(d => d.cle));
+    });
+})();
+</script>
 {% endblock %}

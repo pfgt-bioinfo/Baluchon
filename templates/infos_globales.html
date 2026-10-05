@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% from "macros.html" import legende_couleurs %}
+{% block title %}Infos{% endblock %}
+
+{% block content %}
+<div class="bal-page-header">
+    <div>
+        <h1><i class="bi bi-info-circle me-2"></i>Infos</h1>
+        <div class="subtitle">{{ pagination.total }} info{% if pagination.total != 1 %}s{% endif %}{% if filtre or projet_id_filtre %} (filtre actif){% endif %}</div>
+    </div>
+</div>
+
+<div class="bal-filters">
+    <div>
+        <label class="bal-label">Projet</label>
+        <select class="bal-form-control" style="width:auto;" onchange="location.search='?projet_id='+this.value+'{% if filtre %}&type={{ filtre }}{% endif %}'">
+            <option value="0">Tous les projets</option>
+            {% for p in projets %}
+            <option value="{{ p.id }}" {% if projet_id_filtre == p.id %}selected{% endif %}>{{ p.nom }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 mb-2">
+    <a href="{{ url_for('vue_globale_infos', projet_id=projet_id_filtre or none) }}" class="{{ 'btn-bal' if not filtre else 'btn-bal-outline' }}" style="font-size:0.8rem;">Tous ({{ total }})</a>
+    {% for t in TYPES_LIEN if compteurs[t] %}
+    <a href="{{ url_for('vue_globale_infos', type=t, projet_id=projet_id_filtre or none) }}" class="{{ 'btn-bal' if filtre == t else 'btn-bal-outline' }}" style="font-size:0.8rem;"><span class="info-{{ CATEGORIE_LIEN[t] }}"><span class="point-info"></span></span>{{ TYPES_LIEN_LABELS[t] }} ({{ compteurs[t] }})</a>
+    {% endfor %}
+</div>
+{{ legende_couleurs() }}
+
+{% if infos %}
+<div class="bal-card">
+    <div style="overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;">
+        <thead>
+            <tr style="border-bottom:2px solid var(--bal-border);font-size:0.8rem;text-transform:uppercase;color:var(--bal-muted);letter-spacing:.04em;">
+                <th style="padding:0.5rem 0.6rem;text-align:left;">Intitulé</th>
+                <th style="padding:0.5rem 0.6rem;text-align:left;">Type</th>
+                <th style="padding:0.5rem 0.6rem;text-align:left;">Projet</th>
+                <th style="padding:0.5rem 0.6rem;text-align:left;">Commentaire</th>
+                <th style="padding:0.5rem 0.6rem;text-align:center;">État</th>
+                <th style="padding:0.5rem 0.6rem;text-align:right;">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for lien in infos %}
+        {% with retour=request.full_path, avec_projet=true %}{% include "_ligne_info.html" %}{% endwith %}
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <div class="mt-3">
+        <button type="button" class="btn-bal-outline" onclick="verifierTous()">
+            <i class="bi bi-check2-all"></i> Vérifier les liens de cette page
+        </button>
+    </div>
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="bal-pagination">
+    {% if pagination.has_prev %}<a href="{{ url_for('vue_globale_infos', page=pagination.prev_num, type=filtre, projet_id=projet_id_filtre or none) }}"><i class="bi bi-chevron-left"></i></a>{% endif %}
+    {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+        {% if p %}
+            {% if p == pagination.page %}<span class="current">{{ p }}</span>
+            {% else %}<a href="{{ url_for('vue_globale_infos', page=p, type=filtre, projet_id=projet_id_filtre or none) }}">{{ p }}</a>{% endif %}
+        {% else %}<span>…</span>{% endif %}
+    {% endfor %}
+    {% if pagination.has_next %}<a href="{{ url_for('vue_globale_infos', page=pagination.next_num, type=filtre, projet_id=projet_id_filtre or none) }}"><i class="bi bi-chevron-right"></i></a>{% endif %}
+</div>
+{% endif %}
+{% else %}
+<div class="bal-empty">
+    <i class="bi bi-info-circle"></i>
+    Aucune info trouvée.
+</div>
+{% endif %}
+
+{% include "_infos_script.html" %}
+{% endblock %}

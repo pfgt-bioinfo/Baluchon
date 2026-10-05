@@ -6,6 +6,8 @@ from datetime import datetime
 db = SQLAlchemy()
 
 STATUTS_PROJET = ['en cours', 'en attente', 'archivé', 'abandonné']
+STATUTS_TACHE = ['à faire', 'en cours', 'en attente', 'terminé', 'abandonné']
+STATUTS_TACHE_CLOS = ('terminé', 'abandonné')   # une tâche close n'est plus « ouverte » (ni à faire, ni dans la matrice)
 PRIORITES_TACHE = ['urgent_important', 'important', 'urgent', 'a_planifier']
 PRIORITES_LABELS = {
     'urgent_important': 'Urgent & important',
@@ -13,13 +15,38 @@ PRIORITES_LABELS = {
     'urgent': 'Urgent',
     'a_planifier': 'À planifier',
 }
-TYPES_LIEN = ['dossier', 'fichier_local', 'web', 'upload']
+TYPES_LIEN = ['dossier', 'fichier_local', 'upload', 'web', 'personne']
+# Catégories de couleur des infos : local (dossier, fichier local, fichier main), uploadé, web, personne
+CATEGORIE_LIEN = {
+    'dossier': 'local', 'fichier_local': 'local', 'main': 'local',
+    'upload': 'upload', 'web': 'web', 'personne': 'personne',
+}
+ICONES_LIEN = {
+    'dossier': 'bi-folder2', 'fichier_local': 'bi-file-earmark', 'main': 'bi-file-earmark-code',
+    'upload': 'bi-file-earmark-arrow-up', 'web': 'bi-link-45deg', 'personne': 'bi-person',
+}
 TYPES_LIEN_LABELS = {
     'dossier': 'Dossier',
     'fichier_local': 'Fichier local',
     'web': 'Lien web',
+    'personne': 'Personne',
     'upload': 'Fichier uploadé',
+    'main': 'Fichier main',
 }
+
+MAX_TAGS_PAR_PROJET = 20
+LONGUEUR_MAX_TAG = 40
+
+def normaliser_tags(texte):
+    """'single cell, RNA-seq,, Single Cell' -> ['single cell', 'RNA-seq'] :
+    virgules ou retours à la ligne comme séparateurs, espaces nettoyés, sans doublon (casse ignorée, première graphie conservée)."""
+    vus, resultat = set(), []
+    for brut in (texte or '').replace('\n', ',').split(','):
+        tag = ' '.join(brut.split())[:LONGUEUR_MAX_TAG].strip()
+        if tag and tag.casefold() not in vus:
+            vus.add(tag.casefold())
+            resultat.append(tag)
+    return resultat[:MAX_TAGS_PAR_PROJET]
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -39,11 +66,16 @@ class Projet(db.Model):
     description = db.Column(db.Text)
     chemin_rproj = db.Column(db.String(500))
     statut = db.Column(db.String(50), default='en cours')
+    tags = db.Column(db.Text)  # tags séparés par des virgules (voir normaliser_tags), NULL = aucun
     date_creation = db.Column(db.DateTime, default=datetime.utcnow)
     evenements = db.relationship('Evenement', backref='projet', lazy=True, cascade="all, delete-orphan")
     taches = db.relationship('Tache', backref='projet', lazy=True, cascade="all, delete-orphan")
     liens = db.relationship('LienProjet', backref='projet', lazy=True, cascade="all, delete-orphan",
                              order_by="LienProjet.ordre")
+
+    @property
+    def liste_tags(self):
+        return [t for t in (self.tags or '').split(',') if t]
 
     @property
     def nb_evenements_a_venir(self):
@@ -74,7 +106,7 @@ class Projet(db.Model):
 
 class LienProjet(db.Model):
     """Lien associé à un projet (et éventuellement à un événement) :
-    dossier, fichier local, lien web, ou fichier uploadé. Fusionne l'ancien
+    dossier, fichier local, lien web, personne (valeur = email, commentaire = rôle) ou fichier uploadé. Fusionne l'ancien
     modèle Fichier (pièces jointes d'événement) et l'ancien LienProjet
     (raccourcis épinglés sur le projet)."""
     id = db.Column(db.Integer, primary_key=True)
@@ -110,12 +142,26 @@ class Tache(db.Model):
     date_limite = db.Column(db.DateTime)
     date_creation = db.Column(db.DateTime, default=datetime.utcnow)
     date_cloture = db.Column(db.DateTime)
+    duree_jours = db.Column(db.Float)  # estimation en jours (2.5 = 2 j + 50 % de jour), NULL = non estimée
+    tags = db.Column(db.Text)  # tags séparés par des virgules (voir normaliser_tags), NULL = aucun
     projet_id = db.Column(db.Integer, db.ForeignKey('projet.id'), nullable=False, index=True)
     evenement_id = db.Column(db.Integer, db.ForeignKey('evenement.id'), nullable=False)
 
     @property
+    def liste_tags(self):
+        return [t for t in (self.tags or '').split(',') if t]
+
+    @property
+    def duree_jours_entiers(self):
+        return None if self.duree_jours is None else round(self.duree_jours * 100) // 100
+
+    @property
+    def duree_pourcent(self):
+        return None if self.duree_jours is None else round(self.duree_jours * 100) % 100
+
+    @property
     def urgence_deadline(self):
-        if not self.date_limite or self.statut == 'terminé':
+        if not self.date_limite or self.statut in STATUTS_TACHE_CLOS:
             return None
         jours = (self.date_limite.date() - datetime.utcnow().date()).days
         if jours < 0:
